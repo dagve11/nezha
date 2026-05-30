@@ -35,12 +35,14 @@
 
 ### 编译
 
+**Windows (Docker)**
 ```bash
-# Windows
-go build -o dashboard.exe ./cmd/dashboard
+docker run --rm -v "C:/Users/72366/Desktop/nezha/nezha-master:/build" golang:1.26 sh -c "cd /build && apt-get update -qq && apt-get install -y -qq gcc > /dev/null 2>&1 && CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -o dashboard.exe ./cmd/dashboard"
+```
 
-# Linux (Docker)
-docker run --rm -v "$(pwd)":/build -w /build golang:1.26 sh -c "apt-get update -qq && apt-get install -y -qq gcc > /dev/null 2>&1 && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o dashboard-linux-amd64 ./cmd/dashboard"
+**Linux (Docker)**
+```bash
+docker run --rm -v "C:/Users/72366/Desktop/nezha/nezha-master:/build" golang:1.26 sh -c "cd /build && apt-get update -qq && apt-get install -y -qq gcc > /dev/null 2>&1 && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o dashboard-linux-amd64 ./cmd/dashboard"
 ```
 
 ### 运行
