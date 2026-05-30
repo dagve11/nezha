@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      // 在页面渲染前就执行主题初始化
+      try {
+        const storageKey = "vite-ui-theme"
+        let theme = localStorage.getItem(storageKey)
+        if (theme === "system" || !theme) {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+        }
+        document.documentElement.classList.add(theme)
+      } catch (_e) {
+        document.documentElement.classList.add("light")
+      }
+    </script>
+    <style>
+      /* Prevent FOUC in Safari */
+      html:not(.dark):not(.light) * {
+        visibility: hidden;
+      }
+
+      :root {
+        color-scheme: light;
+        --bg: #ffffff;
+      }
+
+      html.dark {
+        color-scheme: dark;
+        --bg: #242424;
+      }
+
+      html.light {
+        color-scheme: light;
+        --bg: #ffffff;
+      }
+
+      html {
+        background-color: var(--bg);
+      }
+
+      body {
+        background-color: var(--bg);
+      }
+
+      #root {
+        background-color: var(--bg);
+        visibility: hidden;
+      }
+
+      #root.loaded {
+        visibility: visible;
+        animation: fadein 0.2s;
+      }
+
+      @keyframes fadein {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
+    <script>
+      ;(() => {
+        const storageKey = "vite-ui-theme"
+        const theme = localStorage.getItem(storageKey) || "system"
+        const root = document.documentElement
+
+        function updateThemeColor(isDark) {
+          const themeColor = isDark ? "#242424" : "#fafafa"
+          document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColor)
+        }
+
+        function setTheme(newTheme) {
+          root.classList.remove("light", "dark")
+          root.classList.add(newTheme)
+          updateThemeColor(newTheme === "dark")
+        }
+
+        if (theme === "system") {
+          const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+          setTheme(systemTheme)
+
+          window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+            setTheme(e.matches ? "dark" : "light")
+          })
+        } else {
+          setTheme(theme)
+        }
+
+        // Add loaded class after React has mounted
+        window.addEventListener("load", () => {
+          const root = document.getElementById("root")
+          if (root) {
+            // 使用 RAF 确保在下一帧渲染
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                root.classList.add("loaded")
+              })
+            })
+          }
+        })
+      })()
+    </script>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>哪吒监控 Nezha Monitoring</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="hsl(0 0% 98%)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Nezha Monitoring" />
+    <link rel="apple-touch-icon" href="/android-chrome-192x192.png" />
+
+    <link rel="stylesheet" href="https://fastly.jsdelivr.net/gh/lipis/flag-icons@7.0.0/css/flag-icons.min.css" />
+    <link rel="stylesheet" href="https://fastly.jsdelivr.net/npm/font-logos@1/assets/font-logos.css" />
+    <script type="module" crossorigin src="/assets/index.DBXTUA2K.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime.Cyuzqnbw.js">
+    <link rel="modulepreload" crossorigin href="/assets/@floating-ui.Y9xXyXUR.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-router.Broep3A8.js">
+    <link rel="modulepreload" crossorigin href="/assets/@heroicons.BlNrKDrc.js">
+    <link rel="modulepreload" crossorigin href="/assets/@radix-ui.DRwhn7fe.js">
+    <link rel="modulepreload" crossorigin href="/assets/@tanstack.7bu0L72H.js">
+    <link rel="modulepreload" crossorigin href="/assets/class-variance-authority.BLUaYARZ.js">
+    <link rel="modulepreload" crossorigin href="/assets/cmdk.N8M8nZKO.js">
+    <link rel="modulepreload" crossorigin href="/assets/country-flag-icons.RGeqALFX.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-array.C3aIW1U3.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-geo.DQhAwR9_.js">
+    <link rel="modulepreload" crossorigin href="/assets/dayjs.DG8ML_9Z.js">
+    <link rel="modulepreload" crossorigin href="/assets/framer-motion.mnNglxsj.js">
+    <link rel="modulepreload" crossorigin href="/assets/diacritics.BuB40JEw.js">
+    <link rel="modulepreload" crossorigin href="/assets/i18n-iso-countries.CogLpzo7.js">
+    <link rel="modulepreload" crossorigin href="/assets/i18next.PaLHWX5k.js">
+    <link rel="modulepreload" crossorigin href="/assets/lucide-react.CnkpuB5P.js">
+    <link rel="modulepreload" crossorigin href="/assets/luxon.B0DcZ4Zp.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-dom.C2KtklHg.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-i18next.DFw_AlVb.js">
+    <link rel="modulepreload" crossorigin href="/assets/@reduxjs.braiXup9.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-format.D-TRB2rQ.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-color.hIZ3Em3b.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-interpolate.BDRB8R5j.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-scale.BCznwpqF.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-path.DAGKHp_v.js">
+    <link rel="modulepreload" crossorigin href="/assets/d3-shape.uoVMWg3r.js">
+    <link rel="modulepreload" crossorigin href="/assets/decimal.js-light.CEFkIFuC.js">
+    <link rel="modulepreload" crossorigin href="/assets/es-toolkit.BNhoI8Hu.js">
+    <link rel="modulepreload" crossorigin href="/assets/eventemitter3.BEPfYdO7.js">
+    <link rel="modulepreload" crossorigin href="/assets/immer.B7w56gih.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-redux.DxcJvio5.js">
+    <link rel="modulepreload" crossorigin href="/assets/recharts.CvhyuLFC.js">
+    <link rel="modulepreload" crossorigin href="/assets/sonner.DUpcttgk.js">
+    <link rel="modulepreload" crossorigin href="/assets/tailwind-merge.DxdGK6Xj.js">
+    <link rel="stylesheet" crossorigin href="/assets/index.56HshGFO.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

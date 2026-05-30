@@ -1,0 +1,15 @@
+admin_template: admin-dist
+agent_secret_key: wkz3PJx7ifg44xKqWLp5h1LhHDAcsfs2
+avg_ping_count: 2
+cover: 1
+https: {}
+install_host: localhost:8080
+ip_change_notification_group_id: 0
+jwt_timeout: 1
+language: zh_CN
+listen_port: 8080
+location: Asia/Shanghai
+memory: {}
+site_name: AG666
+tsdb: {}
+user_template: user-dist
