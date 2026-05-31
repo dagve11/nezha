@@ -48,10 +48,116 @@ func TestNATPortManagerStartsUpdatesAndDeletesListener(t *testing.T) {
 	}
 
 	manager.Delete(1)
-	_, err = net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoaPort(port)), 100*time.Millisecond)
-	if err == nil {
-		t.Fatal("expected NAT listener to be closed")
+	assertNATPortClosed(t, port)
+}
+
+func TestNATPortManagerPortChangeClosesOldListener(t *testing.T) {
+	firstPort := freeTCPPort(t)
+	secondPort := freeTCPPort(t)
+	manager := NewNATPortManager("127.0.0.1", func(conn net.Conn, nat *model.NAT) {
+		defer conn.Close()
+		_, _ = conn.Write([]byte(nat.Host))
+	})
+	defer manager.StopAll()
+
+	err := manager.Upsert(&model.NAT{
+		Common:   model.Common{ID: 1},
+		Enabled:  true,
+		Name:     "ssh",
+		ServerID: 1,
+		Host:     "first-target:22",
+		Port:     firstPort,
+	})
+	if err != nil {
+		t.Fatalf("Upsert first NAT: %v", err)
 	}
+
+	err = manager.Upsert(&model.NAT{
+		Common:   model.Common{ID: 1},
+		Enabled:  true,
+		Name:     "ssh",
+		ServerID: 1,
+		Host:     "second-target:22",
+		Port:     secondPort,
+	})
+	if err != nil {
+		t.Fatalf("Upsert moved NAT: %v", err)
+	}
+	assertNATPortClosed(t, firstPort)
+	if got := readFromNATPort(t, secondPort); got != "second-target:22" {
+		t.Fatalf("read moved NAT = %q, want %q", got, "second-target:22")
+	}
+}
+
+func TestNATPortManagerSyncRemovesStaleListeners(t *testing.T) {
+	firstPort := freeTCPPort(t)
+	secondPort := freeTCPPort(t)
+	manager := NewNATPortManager("127.0.0.1", func(conn net.Conn, nat *model.NAT) {
+		defer conn.Close()
+		_, _ = conn.Write([]byte(nat.Host))
+	})
+	defer manager.StopAll()
+
+	err := manager.Sync([]*model.NAT{
+		{
+			Common:   model.Common{ID: 1},
+			Enabled:  true,
+			Name:     "ssh",
+			ServerID: 1,
+			Host:     "first-target:22",
+			Port:     firstPort,
+		},
+		{
+			Common:   model.Common{ID: 2},
+			Enabled:  true,
+			Name:     "web",
+			ServerID: 2,
+			Host:     "second-target:80",
+			Port:     secondPort,
+		},
+	})
+	if err != nil {
+		t.Fatalf("initial Sync: %v", err)
+	}
+
+	err = manager.Sync([]*model.NAT{
+		{
+			Common:   model.Common{ID: 2},
+			Enabled:  true,
+			Name:     "web",
+			ServerID: 2,
+			Host:     "second-target:80",
+			Port:     secondPort,
+		},
+	})
+	if err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	assertNATPortClosed(t, firstPort)
+	if got := readFromNATPort(t, secondPort); got != "second-target:80" {
+		t.Fatalf("read retained NAT = %q, want %q", got, "second-target:80")
+	}
+}
+
+func TestNATPortManagerDoesNotListenWhenDisabled(t *testing.T) {
+	port := freeTCPPort(t)
+	manager := NewNATPortManager("127.0.0.1", func(conn net.Conn, nat *model.NAT) {
+		conn.Close()
+	})
+	defer manager.StopAll()
+
+	err := manager.Upsert(&model.NAT{
+		Common:   model.Common{ID: 1},
+		Enabled:  false,
+		Name:     "ssh",
+		ServerID: 1,
+		Host:     "127.0.0.1:22",
+		Port:     port,
+	})
+	if err != nil {
+		t.Fatalf("Upsert disabled NAT: %v", err)
+	}
+	assertNATPortClosed(t, port)
 }
 
 func TestNATPortManagerRejectsOccupiedPort(t *testing.T) {
@@ -104,6 +210,14 @@ func readFromNATPort(t *testing.T, port uint16) string {
 		t.Fatalf("read NAT port: %v", err)
 	}
 	return string(buf[:n])
+}
+
+func assertNATPortClosed(t *testing.T, port uint16) {
+	t.Helper()
+	_, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoaPort(port)), 100*time.Millisecond)
+	if err == nil {
+		t.Fatalf("expected NAT listener on port %d to be closed", port)
+	}
 }
 
 func itoaPort(port uint16) string {
