@@ -495,7 +495,7 @@ func TestBatchMoveServerMasksForeignServerIDsForMembers(t *testing.T) {
 
 func TestNATRejectsUnknownServerID(t *testing.T) {
 	ctx := newMemberValidationContext(t)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/nat", strings.NewReader(`{"name":"x","domain":"x.example","host":"127.0.0.1:80","server_id":9999}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/nat", strings.NewReader(`{"name":"x","port":18080,"host":"127.0.0.1:80","server_id":9999}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	_, err := createNAT(ctx)
 	assert.Error(t, err)

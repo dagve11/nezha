@@ -127,5 +127,6 @@
     "RequestType": "Тип запиту",
     "RequestBody": "Тіло запиту",
     "FileManager": "Псевдо Менеджер файлів",
-    "Downloading": "Завантаження"
+    "Downloading": "Завантаження",
+    "BindPort": "Прив'язати порт"
 }

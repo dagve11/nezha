@@ -128,6 +128,7 @@
     "EditNAT": "NAT உள்ளமைவைத் திருத்து",
     "CreateNAT": "NAT உள்ளமைவை உருவாக்கவும்",
     "LocalService": "உள்ளக பணி",
+    "BindPort": "போர்ட்டை பிணைக்கவும்",
     "BindHostname": "டொமைன் பெயரை பிணைக்கவும்",
     "EditServerGroup": "சேவையக குழுவைத் திருத்து",
     "CreateServerGroup": "சேவையக குழுவை உருவாக்கவும்",

@@ -5,5 +5,5 @@ type NATForm struct {
 	Enabled  bool   `json:"enabled,omitempty"`
 	ServerID uint64 `json:"server_id,omitempty"`
 	Host     string `json:"host,omitempty"`
-	Domain   string `json:"domain,omitempty"`
+	Port     uint16 `json:"port,omitempty"`
 }

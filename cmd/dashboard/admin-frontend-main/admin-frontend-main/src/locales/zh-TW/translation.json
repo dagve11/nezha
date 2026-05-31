@@ -124,6 +124,7 @@
     "EditNAT": "編輯內網穿透配置",
     "CreateNAT": "創建內網穿透配置",
     "LocalService": "本地服務",
+    "BindPort": "綁定連接埠",
     "BindHostname": "綁定域名",
     "EditServerGroup": "編輯伺服器分組",
     "CreateServerGroup": "建立伺服器分組",

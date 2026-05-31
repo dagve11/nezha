@@ -132,6 +132,7 @@
     "EditNAT": "Edit NAT Configuration",
     "CreateNAT": "Create NAT Configuration",
     "LocalService": "Local Service",
+    "BindPort": "Bind Port",
     "BindHostname": "Bind Domain Name",
     "EditServerGroup": "Edit Server Group",
     "CreateServerGroup": "Create Server Group",

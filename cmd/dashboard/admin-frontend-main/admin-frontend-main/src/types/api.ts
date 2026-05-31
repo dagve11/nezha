@@ -399,21 +399,21 @@ export interface ModelLoginResponse {
 
 export interface ModelNAT {
     created_at: string
-    domain: string
     enabled: boolean
     host: string
     id: number
     name: string
+    port: number
     server_id: number
     updated_at: string
 }
 
 export interface ModelNATForm {
-    domain: string
     enabled: boolean
     host: string
     /** @minLength 1 */
     name: string
+    port: number
     server_id: number
 }
 

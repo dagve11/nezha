@@ -142,6 +142,7 @@
     "TasksToTriggerOnAlert": "Aufgaben, die bei Alarm ausgelöst werden sollen",
     "NotifierGroup": "Benachrichtigungsgruppe",
     "EditNAT": "NAT-Konfiguration bearbeiten",
+    "BindPort": "Bind Port",
     "BindHostname": "Bind Domain Name",
     "EditService": "Service bearbeiten",
     "Count": "Anzahl",

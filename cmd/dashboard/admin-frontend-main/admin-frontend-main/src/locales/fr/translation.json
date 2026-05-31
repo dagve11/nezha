@@ -92,5 +92,6 @@
     "UserInvalid": "L’utilisateur est invalide",
     "BlockByUser": "Bloqué par un administrateur",
     "OnlineUser": "Utilisateur en ligne",
-    "UserId": "ID utilisateur"
+    "UserId": "ID utilisateur",
+    "BindPort": "Port lié"
 }

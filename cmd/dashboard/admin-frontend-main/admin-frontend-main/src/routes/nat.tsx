@@ -90,12 +90,12 @@ export default function NATPage() {
             },
         },
         {
-            header: t("BindHostname"),
-            accessorKey: "domain",
-            accessorFn: (row) => row.domain,
+            header: t("BindPort"),
+            accessorKey: "port",
+            accessorFn: (row) => row.port,
             cell: ({ row }) => {
                 const s = row.original
-                return <div className="max-w-32 whitespace-normal break-words">{s.domain}</div>
+                return <div className="max-w-32 whitespace-normal break-words">{s.port}</div>
             },
         },
         {

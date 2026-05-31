@@ -122,6 +122,7 @@
     "EditNAT": "Modifica configurazione NAT",
     "CreateNAT": "Crea configurazione NAT",
     "LocalService": "servizio locale",
+    "BindPort": "Associa porta",
     "BindHostname": "Associa il nome di dominio",
     "EditServerGroup": "Modifica gruppo di server",
     "CreateServerGroup": "Crea gruppo di server",

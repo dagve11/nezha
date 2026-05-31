@@ -132,6 +132,7 @@
     "EditNAT": "Edit Konfigurasi NAT",
     "CreateNAT": "Buat Konfigurasi NAT",
     "LocalService": "Layanan Lokal",
+    "BindPort": "Ikat Port",
     "BindHostname": "Ikat Nama Domain",
     "EditServerGroup": "Edit Grup Server",
     "CreateServerGroup": "Buat Grup Server",

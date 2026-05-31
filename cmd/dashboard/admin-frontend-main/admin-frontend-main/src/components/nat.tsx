@@ -43,7 +43,7 @@ const natFormSchema = z.object({
     enabled: z.boolean(),
     server_id: z.coerce.number().int(),
     host: z.string(),
-    domain: z.string(),
+    port: z.coerce.number().int().min(1).max(65535),
 })
 
 type NatFormInput = z.input<typeof natFormSchema>
@@ -59,14 +59,14 @@ export const NATCard: React.FC<NATCardProps> = ({ data, mutate }) => {
                 enabled: data.enabled ?? false,
                 server_id: data.server_id ?? 0,
                 host: data.host ?? "",
-                domain: data.domain ?? "",
+                port: data.port ?? 0,
             }
             : {
                 name: "",
                 enabled: false,
                 server_id: 0,
                 host: "",
-                domain: "",
+                port: 0,
             },
         resetOptions: {
             keepDefaultValues: false,
@@ -160,19 +160,26 @@ export const NATCard: React.FC<NATCardProps> = ({ data, mutate }) => {
                                 />
                                 <FormField
                                     control={form.control}
-                                    name="domain"
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>{t("BindHostname")}</FormLabel>
-                                            <FormControl>
-                                                <Input
-                                                    placeholder="router.app.yourdomain.com"
-                                                    {...field}
-                                                />
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )}
+                                    name="port"
+                                    render={({ field }) => {
+                                        const { value, ...fieldProps } = field
+                                        return (
+                                            <FormItem>
+                                                <FormLabel>{t("BindPort")}</FormLabel>
+                                                <FormControl>
+                                                    <Input
+                                                        type="number"
+                                                        min={1}
+                                                        max={65535}
+                                                        placeholder="2222"
+                                                        value={String(value ?? "")}
+                                                        {...fieldProps}
+                                                    />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )
+                                    }}
                                 />
                                 <FormField
                                     control={form.control}

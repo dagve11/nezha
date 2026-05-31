@@ -106,6 +106,7 @@
     "Scheduled": "Tareas programadas",
     "Rules": "Reglas",
     "CreateServerGroup": "Crear grupo de servidores",
+    "BindPort": "Vincular puerto",
     "BindHostname": "Vincular nombre de dominio",
     "Task": "Tarea",
     "Enable": "Habilitar",

@@ -3,8 +3,8 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
-	"net/http"
 	"net/netip"
 	"time"
 
@@ -139,69 +139,68 @@ func DispatchKeepalive() {
 	})
 }
 
-func ServeNAT(w http.ResponseWriter, r *http.Request, natConfig *model.NAT) {
+func serveNATIO(userIO io.ReadWriteCloser, natConfig *model.NAT) error {
+	streamId, cleanup, err := prepareNATStream(natConfig)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	return attachNATStream(streamId, userIO)
+}
+
+func prepareNATStream(natConfig *model.NAT) (string, func(), error) {
 	server, _ := singleton.ServerShared.Get(natConfig.ServerID)
 	if server == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("server not found or not connected"))
-		return
+		return "", nil, fmt.Errorf("server not found or not connected")
 	}
 	stream := server.GetTaskStream()
 	if stream == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("server not found or not connected"))
-		return
+		return "", nil, fmt.Errorf("server not found or not connected")
 	}
 
 	streamId, err := uuid.GenerateUUID()
 	if err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write(fmt.Appendf(nil, "stream id error: %v", err))
-		return
+		return "", nil, fmt.Errorf("stream id error: %w", err)
 	}
 
-	// NAT streams are anonymous HTTP-facing tunnels; they are NOT reachable
+	// NAT streams are anonymous TCP-facing tunnels; they are NOT reachable
 	// via /ws/terminal or /ws/file (which check stream ownership), so the
 	// creator user ID does not need to identify a real user. The targetServerID
 	// IS required though — the receiving agent must prove it is the server the
 	// NAT config addressed, otherwise any agent that snoops the streamId can
 	// answer NAT traffic on behalf of an unrelated host.
 	rpcService.NezhaHandlerSingleton.CreateStream(streamId, 0, server.ID)
-	defer rpcService.NezhaHandlerSingleton.CloseStream(streamId)
+	cleanup := func() {
+		rpcService.NezhaHandlerSingleton.CloseStream(streamId)
+	}
 
 	taskData, err := json.Marshal(model.TaskNAT{
 		StreamID: streamId,
 		Host:     natConfig.Host,
 	})
 	if err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write(fmt.Appendf(nil, "task data error: %v", err))
-		return
+		cleanup()
+		return "", nil, fmt.Errorf("task data error: %w", err)
 	}
 
 	if err := stream.Send(&proto.Task{
 		Type: model.TaskTypeNAT,
 		Data: string(taskData),
 	}); err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write(fmt.Appendf(nil, "send task error: %v", err))
-		return
+		cleanup()
+		return "", nil, fmt.Errorf("send task error: %w", err)
 	}
 
-	wWrapped, err := utils.NewRequestWrapper(r, w)
-	if err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write(fmt.Appendf(nil, "request wrapper error: %v", err))
-		return
+	return streamId, cleanup, nil
+}
+
+func attachNATStream(streamId string, userIO io.ReadWriteCloser) error {
+	if err := rpcService.NezhaHandlerSingleton.UserConnected(streamId, userIO); err != nil {
+		return fmt.Errorf("user connected error: %w", err)
 	}
 
-	if err := rpcService.NezhaHandlerSingleton.UserConnected(streamId, wWrapped); err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write(fmt.Appendf(nil, "user connected error: %v", err))
-		return
-	}
-
-	rpcService.NezhaHandlerSingleton.StartStream(streamId, time.Second*10)
+	return rpcService.NezhaHandlerSingleton.StartStream(streamId, time.Second*10)
 }
 
 func canSendTaskToServer(task *model.Service, server *model.Server) bool {
