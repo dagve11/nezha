@@ -55,6 +55,7 @@ func createNAT(c *gin.Context) (uint64, error) {
 	if err := c.ShouldBindJSON(&nf); err != nil {
 		return 0, err
 	}
+	nf = normalizeNATForm(nf)
 
 	if nf.ServerID == 0 {
 		return 0, singleton.Localizer.ErrorT("have invalid server id")
@@ -117,6 +118,7 @@ func updateNAT(c *gin.Context) (any, error) {
 	if err := c.ShouldBindJSON(&nf); err != nil {
 		return nil, err
 	}
+	nf = normalizeNATForm(nf)
 
 	if nf.ServerID == 0 {
 		return nil, singleton.Localizer.ErrorT("have invalid server id")
@@ -201,6 +203,12 @@ func batchDeleteNAT(c *gin.Context) (any, error) {
 	}
 	singleton.NATShared.Delete(n)
 	return nil, nil
+}
+
+func normalizeNATForm(nf model.NATForm) model.NATForm {
+	nf.Name = strings.TrimSpace(nf.Name)
+	nf.Host = strings.TrimSpace(nf.Host)
+	return nf
 }
 
 func validateNATForm(nf model.NATForm, currentID uint64) error {

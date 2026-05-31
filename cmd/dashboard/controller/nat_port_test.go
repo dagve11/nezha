@@ -79,6 +79,22 @@ func TestCreateNATStoresBindPort(t *testing.T) {
 	require.Equal(t, id, cached.ID)
 }
 
+func TestCreateNATTrimsLocalServiceBeforePersisting(t *testing.T) {
+	ctx := setupNATPortControllerFixture(t)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/nat", strings.NewReader(`{"name":"ssh","enabled":false,"host":" 127.0.0.1:22 ","port":2222,"server_id":1}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	id, err := createNAT(ctx)
+	require.NoError(t, err)
+
+	var got model.NAT
+	require.NoError(t, singleton.DB.First(&got, id).Error)
+	require.Equal(t, "127.0.0.1:22", got.Host)
+	cached := singleton.NATShared.GetNATConfigByPort(2222)
+	require.NotNil(t, cached)
+	require.Equal(t, "127.0.0.1:22", cached.Host)
+}
+
 func TestCreateNATRejectsDashboardListenPort(t *testing.T) {
 	ctx := setupNATPortControllerFixture(t)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/nat", strings.NewReader(`{"name":"ssh","enabled":false,"host":"127.0.0.1:22","port":8008,"server_id":1}`))
