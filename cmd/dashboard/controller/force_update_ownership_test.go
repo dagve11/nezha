@@ -226,3 +226,19 @@ func TestBatchDeleteServerSendsDestroyTaskAndBlocksUUIDReuse(t *testing.T) {
 	_, ok := singleton.ServerShared.UUIDToID("33333333-3333-3333-3333-333333333333")
 	assert.False(t, ok, "deleted UUID must be removed from the live cache")
 }
+
+func TestBatchDeleteServerDeduplicatesDestroyTasks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stream, reset := setupServerDeleteFixture(t)
+	defer reset()
+
+	body := runBatchDeleteServer(t, 100, []uint64{7, 7})
+	var resp struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	assert.NoError(t, json.Unmarshal(body, &resp))
+	assert.True(t, resp.Success, "delete response: %s", string(body))
+	assert.Empty(t, resp.Error)
+	assert.Len(t, stream.sentTasks, 1, "duplicate ids in one delete request must not send duplicate destroy tasks")
+}

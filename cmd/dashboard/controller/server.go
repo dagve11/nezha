@@ -127,6 +127,7 @@ func batchDeleteServer(c *gin.Context) (any, error) {
 		return nil, singleton.Localizer.ErrorT("permission denied")
 	}
 
+	servers = deduplicateServerIDs(servers)
 	deletedServers := snapshotServersForDeletion(servers)
 
 	err := singleton.DB.Transaction(func(tx *gorm.DB) error {
@@ -171,6 +172,22 @@ func batchDeleteServer(c *gin.Context) (any, error) {
 	singleton.ServerTransferShared.OnServersDeleted(servers)
 	singleton.ServerShared.Delete(servers)
 	return nil, nil
+}
+
+func deduplicateServerIDs(ids []uint64) []uint64 {
+	if len(ids) < 2 {
+		return ids
+	}
+	seen := make(map[uint64]struct{}, len(ids))
+	uniqueIDs := make([]uint64, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	return uniqueIDs
 }
 
 func snapshotServersForDeletion(ids []uint64) []*model.Server {
