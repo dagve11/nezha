@@ -42,8 +42,7 @@ func (s *NezhaHandler) RequestTask(stream pb.NezhaService_RequestTaskServer) err
 	var err error
 	if clientID, err = s.Auth.CheckRequestTask(stream.Context()); err != nil {
 		if errors.Is(err, errDeletedAgentDestroyOnly) {
-			_ = stream.Send(&pb.Task{Type: model.TaskTypeDestroyAgent})
-			return context.Canceled
+			return sendDeletedAgentDestroyTask(stream)
 		}
 		return err
 	}
@@ -124,6 +123,21 @@ func (s *NezhaHandler) RequestTask(stream pb.NezhaService_RequestTaskServer) err
 					Reporter: clientID,
 				})
 			}
+		}
+	}
+}
+
+func sendDeletedAgentDestroyTask(stream pb.NezhaService_RequestTaskServer) error {
+	if err := stream.Send(&pb.Task{Type: model.TaskTypeDestroyAgent}); err != nil {
+		return err
+	}
+	for {
+		result, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if result.GetType() == model.TaskTypeDestroyAgent {
+			return context.Canceled
 		}
 	}
 }

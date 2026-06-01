@@ -21,6 +21,7 @@ type requestTaskSecurityStream struct {
 	onRecv  func()
 	onSend  func(*pb.Task)
 	sendErr error
+	recvN   int
 }
 
 type reportStateSecurityStream struct {
@@ -37,10 +38,11 @@ func (s *requestTaskSecurityStream) Send(task *pb.Task) error {
 }
 
 func (s *requestTaskSecurityStream) Recv() (*pb.TaskResult, error) {
+	s.recvN++
+	if s.onRecv != nil {
+		s.onRecv()
+	}
 	if len(s.results) == 0 {
-		if s.onRecv != nil {
-			s.onRecv()
-		}
 		return nil, context.Canceled
 	}
 	result := s.results[0]
@@ -308,6 +310,37 @@ func TestRequestTaskDeletedUUIDReceivesDestroyTask(t *testing.T) {
 	}
 	if sent[0].GetType() != model.TaskTypeDestroyAgent {
 		t.Fatalf("deleted UUID RequestTask must receive destroy task, got type=%d", sent[0].GetType())
+	}
+}
+
+func TestRequestTaskDeletedUUIDWaitsForDestroyTaskResult(t *testing.T) {
+	const deletedUUID = "edededed-eded-eded-eded-edededededed"
+	setupRequestTaskSecurityFixture(t, nil, nil, map[uint64]model.UserInfo{
+		200: {Role: model.RoleMember},
+	}, map[string]uint64{"reporter-secret": 200})
+
+	if err := singleton.DB.Create(&model.DeletedServer{
+		Common:   model.Common{UserID: 200},
+		ServerID: 7,
+		UUID:     deletedUUID,
+		Name:     "deleted-server",
+	}).Error; err != nil {
+		t.Fatalf("create deleted server tombstone: %v", err)
+	}
+
+	stream := requestTaskSecurityAuthedStream("reporter-secret", deletedUUID)
+	stream.results = []*pb.TaskResult{{
+		Type:       model.TaskTypeDestroyAgent,
+		Successful: true,
+		Data:       "agent self-removal scheduled",
+	}}
+
+	err := NewNezhaHandler().RequestTask(stream)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected RequestTask to close after destroy task result, got %v", err)
+	}
+	if stream.recvN == 0 {
+		t.Fatal("deleted UUID RequestTask must wait for the agent to receive and report the destroy task before closing the stream")
 	}
 }
 
