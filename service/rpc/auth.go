@@ -167,6 +167,13 @@ func (a *authHandler) check(ctx context.Context) (uint64, error) {
 		return 0, status.Error(codes.Unauthenticated, err.Error())
 	}
 	if !hasID {
+		deleted, err := singleton.IsServerUUIDDeleted(clientUUID)
+		if err != nil {
+			return 0, status.Error(codes.Unauthenticated, err.Error())
+		}
+		if deleted {
+			return 0, status.Error(codes.Unauthenticated, "server UUID has been deleted")
+		}
 		s := model.Server{UUID: clientUUID, Name: petname.Generate(2, "-"), Common: model.Common{
 			UserID: userId,
 		}}

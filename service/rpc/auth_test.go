@@ -46,7 +46,7 @@ func setupAuthHandshakeFixture(t *testing.T) func() {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Server{}, &model.ServerTransfer{}, &model.WAF{}); err != nil {
+	if err := db.AutoMigrate(&model.Server{}, &model.ServerTransfer{}, &model.WAF{}, &model.DeletedServer{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := db.Create(&model.Server{
@@ -101,7 +101,7 @@ func setupAuthAgentFixture(t *testing.T) func() {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Server{}, &model.ServerTransfer{}); err != nil {
+	if err := db.AutoMigrate(&model.Server{}, &model.ServerTransfer{}, &model.DeletedServer{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := db.Create(&model.Server{
@@ -181,6 +181,32 @@ func TestAuthorizeAgentForUUIDPermitsUnknownUUIDForRegistration(t *testing.T) {
 	}
 	if hasID {
 		t.Fatalf("hasID must be false for unknown UUID, got cid=%d", cid)
+	}
+}
+
+func TestAuthCheckRejectsDeletedUUIDInsteadOfReRegistering(t *testing.T) {
+	defer setupAuthHandshakeFixture(t)()
+
+	const deletedUUID = "44444444-4444-4444-4444-444444444444"
+	if err := singleton.DB.Create(&model.DeletedServer{
+		Common:   model.Common{UserID: 100},
+		ServerID: 99,
+		UUID:     deletedUUID,
+		Name:     "deleted-agent",
+	}).Error; err != nil {
+		t.Fatalf("create deleted server tombstone: %v", err)
+	}
+
+	if cid, err := authCheckWithSecret("alice-global", deletedUUID); err == nil {
+		t.Fatalf("deleted UUID must not be allowed to register again, got cid=%d", cid)
+	}
+
+	var count int64
+	if err := singleton.DB.Model(&model.Server{}).Where("uuid = ?", deletedUUID).Count(&count).Error; err != nil {
+		t.Fatalf("count server rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("deleted UUID must not create a new server row, got count=%d", count)
 	}
 }
 

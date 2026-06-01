@@ -30,6 +30,11 @@ const (
 	// Pre-transfer agents do not recognise this type — dashboard MUST gate
 	// transfers on agent capability before pushing.
 	TaskTypeServerTransferApply
+
+	// Keep this explicit because the standalone agent has additional MCP task
+	// types between ServerTransferApply and DestroyAgent. Dashboard and agent
+	// must agree on the wire value.
+	TaskTypeDestroyAgent = 21
 )
 
 type TerminalTask struct {
@@ -138,7 +143,7 @@ func IsServiceSentinelNeeded(t uint64) bool {
 	case TaskTypeCommand, TaskTypeTerminalGRPC, TaskTypeUpgrade,
 		TaskTypeKeepalive, TaskTypeNAT, TaskTypeFM,
 		TaskTypeReportConfig, TaskTypeApplyConfig,
-		TaskTypeServerTransferApply:
+		TaskTypeServerTransferApply, TaskTypeDestroyAgent:
 		return false
 	default:
 		return true

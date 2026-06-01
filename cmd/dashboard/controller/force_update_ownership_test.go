@@ -109,7 +109,7 @@ func TestForceUpdateServerOnlineForeignIDIndistinguishableFromUnknown(t *testing
 	defer reset()
 
 	const bobID = uint64(200)
-	foreignResp := decodeForceUpdate(t, runForceUpdate(t, bobID, []uint64{1}))     // alice's online
+	foreignResp := decodeForceUpdate(t, runForceUpdate(t, bobID, []uint64{1}))    // alice's online
 	unknownResp := decodeForceUpdate(t, runForceUpdate(t, bobID, []uint64{9999})) // does not exist
 
 	assert.Equal(t, foreignResp.Success, unknownResp.Success,
@@ -146,4 +146,83 @@ func TestForceUpdateServerOwnerOnlineStillDispatches(t *testing.T) {
 	assert.Empty(t, resp.Data.Offline)
 	assert.Empty(t, resp.Data.Failure)
 	assert.Len(t, stream.sentTasks, 1, "owner's own server must receive the upgrade task exactly once")
+}
+
+func setupServerDeleteFixture(t *testing.T) (stream *fakeTaskStream, reset func()) {
+	t.Helper()
+	if singleton.Localizer == nil {
+		singleton.Localizer = i18n.NewLocalizer("en_US", "nezha", "translations", i18n.Translations)
+	}
+	originalDB := singleton.DB
+	originalShared := singleton.ServerShared
+	originalTransferShared := singleton.ServerTransferShared
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	assert.NoError(t, err)
+	assert.NoError(t, db.AutoMigrate(&model.Server{}, &model.ServerGroupServer{}, &model.Transfer{}, &model.DeletedServer{}, &model.ServerTransfer{}))
+	assert.NoError(t, db.Create(&model.Server{
+		Common: model.Common{ID: 7, UserID: 100},
+		UUID:   "33333333-3333-3333-3333-333333333333",
+		Name:   "delete-me",
+	}).Error)
+
+	singleton.DB = db
+	singleton.ServerShared = singleton.NewServerClass()
+	singleton.ServerTransferShared = singleton.NewServerTransferClass()
+
+	server, _ := singleton.ServerShared.Get(7)
+	stream = &fakeTaskStream{}
+	server.SetTaskStream(stream)
+
+	return stream, func() {
+		if singleton.ServerTransferShared != nil {
+			singleton.ServerTransferShared.Stop()
+		}
+		singleton.DB = originalDB
+		singleton.ServerShared = originalShared
+		singleton.ServerTransferShared = originalTransferShared
+	}
+}
+
+func runBatchDeleteServer(t *testing.T, callerID uint64, ids []uint64) []byte {
+	t.Helper()
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		setAuthUser(c, callerID, model.RoleMember)
+		c.Next()
+	})
+	r.POST("/batch-delete/server", commonHandler(batchDeleteServer))
+
+	body, _ := json.Marshal(ids)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/batch-delete/server", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	return w.Body.Bytes()
+}
+
+func TestBatchDeleteServerSendsDestroyTaskAndBlocksUUIDReuse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stream, reset := setupServerDeleteFixture(t)
+	defer reset()
+
+	body := runBatchDeleteServer(t, 100, []uint64{7})
+	var resp struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	assert.NoError(t, json.Unmarshal(body, &resp))
+	assert.True(t, resp.Success, "delete response: %s", string(body))
+	assert.Empty(t, resp.Error)
+
+	assert.Len(t, stream.sentTasks, 1, "online agent must receive a destroy task before the dashboard record is removed")
+	assert.Equal(t, uint64(model.TaskTypeDestroyAgent), stream.sentTasks[0].Type)
+
+	var tombstone model.DeletedServer
+	assert.NoError(t, singleton.DB.Where("uuid = ?", "33333333-3333-3333-3333-333333333333").First(&tombstone).Error)
+	assert.Equal(t, uint64(7), tombstone.ServerID)
+	assert.Equal(t, uint64(100), tombstone.UserID)
+
+	_, ok := singleton.ServerShared.UUIDToID("33333333-3333-3333-3333-333333333333")
+	assert.False(t, ok, "deleted UUID must be removed from the live cache")
 }

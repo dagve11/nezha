@@ -127,7 +127,12 @@ func batchDeleteServer(c *gin.Context) (any, error) {
 		return nil, singleton.Localizer.ErrorT("permission denied")
 	}
 
+	deletedServers := snapshotServersForDeletion(servers)
+
 	err := singleton.DB.Transaction(func(tx *gorm.DB) error {
+		if err := singleton.MarkServersDeleted(tx, deletedServers); err != nil {
+			return err
+		}
 		if err := tx.Unscoped().Delete(&model.Server{}, "id in (?)", servers).Error; err != nil {
 			return err
 		}
@@ -154,6 +159,8 @@ func batchDeleteServer(c *gin.Context) (any, error) {
 	singleton.DB.Unscoped().Delete(&model.Transfer{}, "server_id in (?)", servers)
 	singleton.AlertsLock.Unlock()
 
+	dispatchDestroyAgentTasks(deletedServers)
+
 	// Cancel any in-flight transfers BEFORE the in-memory ServerShared
 	// entry is dropped: the order shortens the window in which a
 	// concurrent Retry/Register could install a fresh pending entry for
@@ -164,6 +171,30 @@ func batchDeleteServer(c *gin.Context) (any, error) {
 	singleton.ServerTransferShared.OnServersDeleted(servers)
 	singleton.ServerShared.Delete(servers)
 	return nil, nil
+}
+
+func snapshotServersForDeletion(ids []uint64) []*model.Server {
+	deletedServers := make([]*model.Server, 0, len(ids))
+	for _, id := range ids {
+		if server, ok := singleton.ServerShared.Get(id); ok && server != nil {
+			deletedServers = append(deletedServers, server)
+		}
+	}
+	return deletedServers
+}
+
+func dispatchDestroyAgentTasks(servers []*model.Server) {
+	for _, server := range servers {
+		stream := server.GetTaskStream()
+		if stream == nil {
+			continue
+		}
+		if err := stream.Send(&pb.Task{
+			Type: model.TaskTypeDestroyAgent,
+		}); err != nil {
+			continue
+		}
+	}
 }
 
 // Force update Agent
