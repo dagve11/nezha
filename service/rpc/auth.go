@@ -23,20 +23,33 @@ type authHandler struct {
 }
 
 var errDeletedAgentDestroyOnly = errors.New("deleted agent may only receive destroy task")
+var errDeletedAgentReportOnly = errors.New("deleted agent may only report before destroy")
+
+type deletedAgentAuthMode uint8
+
+const (
+	deletedAgentReject deletedAgentAuthMode = iota
+	deletedAgentDestroyOnly
+	deletedAgentReportOnly
+)
 
 func (a *authHandler) Check(ctx context.Context) (uint64, error) {
-	return a.check(ctx, false)
+	return a.check(ctx, deletedAgentReject)
 }
 
 func (a *authHandler) CheckRequestTask(ctx context.Context) (uint64, error) {
-	return a.check(ctx, true)
+	return a.check(ctx, deletedAgentDestroyOnly)
+}
+
+func (a *authHandler) CheckReportSystemInfo(ctx context.Context) (uint64, error) {
+	return a.check(ctx, deletedAgentReportOnly)
 }
 
 // 所有 auth caller 走完全相同的 ServerTransfer dual-secret 容忍策略。
 // revertDelivery 不在 auth 阶段消费 —— 真正派发 rollback ApplyConfig 的
 // pushRevertIfOnline 才有资格清理它，否则 auth 提前清就会让 OnAgentReconnect
 // 找不到 recovery 记录，agent 10s timer 一到就锁死在被拒绝的新 secret 上。
-func (a *authHandler) check(ctx context.Context, allowDeletedDestroy bool) (uint64, error) {
+func (a *authHandler) check(ctx context.Context, deletedMode deletedAgentAuthMode) (uint64, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return 0, status.Errorf(codes.Unauthenticated, "获取 metaData 失败")
@@ -175,8 +188,11 @@ func (a *authHandler) check(ctx context.Context, allowDeletedDestroy bool) (uint
 			return 0, status.Error(codes.Unauthenticated, err.Error())
 		}
 		if deleted {
-			if allowDeletedDestroy {
+			switch deletedMode {
+			case deletedAgentDestroyOnly:
 				return 0, errDeletedAgentDestroyOnly
+			case deletedAgentReportOnly:
+				return 0, errDeletedAgentReportOnly
 			}
 			return 0, status.Error(codes.Unauthenticated, "server UUID has been deleted")
 		}

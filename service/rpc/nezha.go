@@ -203,7 +203,10 @@ func (s *NezhaHandler) ReportSystemState(stream pb.NezhaService_ReportSystemStat
 func (s *NezhaHandler) onReportSystemInfo(c context.Context, r *pb.Host) error {
 	var clientID uint64
 	var err error
-	if clientID, err = s.Auth.Check(c); err != nil {
+	if clientID, err = s.Auth.CheckReportSystemInfo(c); err != nil {
+		if errors.Is(err, errDeletedAgentReportOnly) {
+			return nil
+		}
 		return err
 	}
 	host := model.PB2Host(r)

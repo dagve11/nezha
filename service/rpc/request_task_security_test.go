@@ -284,6 +284,38 @@ func TestRequestTaskDeletedUUIDReceivesDestroyTask(t *testing.T) {
 	}
 }
 
+func TestReportSystemInfo2AllowsDeletedUUIDToReachDestroyTask(t *testing.T) {
+	const deletedUUID = "abababab-abab-abab-abab-abababababab"
+	setupRequestTaskSecurityFixture(t, nil, nil, map[uint64]model.UserInfo{
+		200: {Role: model.RoleMember},
+	}, map[string]uint64{"reporter-secret": 200})
+
+	if err := singleton.DB.Create(&model.DeletedServer{
+		Common:   model.Common{UserID: 200},
+		ServerID: 7,
+		UUID:     deletedUUID,
+		Name:     "deleted-server",
+	}).Error; err != nil {
+		t.Fatalf("create deleted server tombstone: %v", err)
+	}
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"client_secret", "reporter-secret",
+		"client_uuid", deletedUUID,
+	))
+	if _, err := NewNezhaHandler().ReportSystemInfo2(ctx, &pb.Host{}); err != nil {
+		t.Fatalf("deleted UUID ReportSystemInfo2 must succeed so agent can open RequestTask and receive destroy task, got %v", err)
+	}
+
+	var count int64
+	if err := singleton.DB.Model(&model.Server{}).Where("uuid = ?", deletedUUID).Count(&count).Error; err != nil {
+		t.Fatalf("count server rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("deleted UUID ReportSystemInfo2 must not recreate server row, got count=%d", count)
+	}
+}
+
 func setupRequestTaskSecurityFixture(t *testing.T, servers []*model.Server, crons []*model.Cron, users map[uint64]model.UserInfo, agentSecrets map[string]uint64) {
 	t.Helper()
 
