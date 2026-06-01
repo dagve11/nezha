@@ -23,6 +23,12 @@ type requestTaskSecurityStream struct {
 	sendErr error
 }
 
+type reportStateSecurityStream struct {
+	ctx      context.Context
+	states   []*pb.State
+	receipts []*pb.Receipt
+}
+
 func (s *requestTaskSecurityStream) Send(task *pb.Task) error {
 	if s.onSend != nil {
 		s.onSend(task)
@@ -48,6 +54,27 @@ func (s *requestTaskSecurityStream) SetTrailer(metadata.MD)       {}
 func (s *requestTaskSecurityStream) Context() context.Context     { return s.ctx }
 func (s *requestTaskSecurityStream) SendMsg(any) error            { return nil }
 func (s *requestTaskSecurityStream) RecvMsg(any) error            { return context.Canceled }
+
+func (s *reportStateSecurityStream) Send(receipt *pb.Receipt) error {
+	s.receipts = append(s.receipts, receipt)
+	return nil
+}
+
+func (s *reportStateSecurityStream) Recv() (*pb.State, error) {
+	if len(s.states) == 0 {
+		return nil, context.Canceled
+	}
+	state := s.states[0]
+	s.states = s.states[1:]
+	return state, nil
+}
+
+func (s *reportStateSecurityStream) SetHeader(metadata.MD) error  { return nil }
+func (s *reportStateSecurityStream) SendHeader(metadata.MD) error { return nil }
+func (s *reportStateSecurityStream) SetTrailer(metadata.MD)       {}
+func (s *reportStateSecurityStream) Context() context.Context     { return s.ctx }
+func (s *reportStateSecurityStream) SendMsg(any) error            { return nil }
+func (s *reportStateSecurityStream) RecvMsg(any) error            { return context.Canceled }
 
 func TestRequestTaskSkipsCronResultOwnedByAnotherUser(t *testing.T) {
 	reporter := requestTaskSecurityServer(7, 200, "11111111-1111-1111-1111-111111111111")
@@ -313,6 +340,46 @@ func TestReportSystemInfo2AllowsDeletedUUIDToReachDestroyTask(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("deleted UUID ReportSystemInfo2 must not recreate server row, got count=%d", count)
+	}
+}
+
+func TestReportSystemStateAllowsDeletedUUIDDuringDestroy(t *testing.T) {
+	const deletedUUID = "12121212-1212-1212-1212-121212121212"
+	setupRequestTaskSecurityFixture(t, nil, nil, map[uint64]model.UserInfo{
+		200: {Role: model.RoleMember},
+	}, map[string]uint64{"reporter-secret": 200})
+
+	if err := singleton.DB.Create(&model.DeletedServer{
+		Common:   model.Common{UserID: 200},
+		ServerID: 7,
+		UUID:     deletedUUID,
+		Name:     "deleted-server",
+	}).Error; err != nil {
+		t.Fatalf("create deleted server tombstone: %v", err)
+	}
+
+	stream := &reportStateSecurityStream{
+		ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+			"client_secret", "reporter-secret",
+			"client_uuid", deletedUUID,
+		)),
+		states: []*pb.State{{Cpu: 1}},
+	}
+
+	err := NewNezhaHandler().ReportSystemState(stream)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("deleted UUID ReportSystemState must drain until the agent disconnects, got %v", err)
+	}
+	if len(stream.receipts) != 1 || !stream.receipts[0].GetProced() {
+		t.Fatalf("deleted UUID ReportSystemState must acknowledge state while destroy task is delivered, got %#v", stream.receipts)
+	}
+
+	var count int64
+	if err := singleton.DB.Model(&model.Server{}).Where("uuid = ?", deletedUUID).Count(&count).Error; err != nil {
+		t.Fatalf("count server rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("deleted UUID ReportSystemState must not recreate server row, got count=%d", count)
 	}
 }
 

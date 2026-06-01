@@ -24,6 +24,7 @@ type authHandler struct {
 
 var errDeletedAgentDestroyOnly = errors.New("deleted agent may only receive destroy task")
 var errDeletedAgentReportOnly = errors.New("deleted agent may only report before destroy")
+var errDeletedAgentStateOnly = errors.New("deleted agent may only report state before destroy")
 
 type deletedAgentAuthMode uint8
 
@@ -31,6 +32,7 @@ const (
 	deletedAgentReject deletedAgentAuthMode = iota
 	deletedAgentDestroyOnly
 	deletedAgentReportOnly
+	deletedAgentStateOnly
 )
 
 func (a *authHandler) Check(ctx context.Context) (uint64, error) {
@@ -43,6 +45,10 @@ func (a *authHandler) CheckRequestTask(ctx context.Context) (uint64, error) {
 
 func (a *authHandler) CheckReportSystemInfo(ctx context.Context) (uint64, error) {
 	return a.check(ctx, deletedAgentReportOnly)
+}
+
+func (a *authHandler) CheckReportSystemState(ctx context.Context) (uint64, error) {
+	return a.check(ctx, deletedAgentStateOnly)
 }
 
 // 所有 auth caller 走完全相同的 ServerTransfer dual-secret 容忍策略。
@@ -193,6 +199,8 @@ func (a *authHandler) check(ctx context.Context, deletedMode deletedAgentAuthMod
 				return 0, errDeletedAgentDestroyOnly
 			case deletedAgentReportOnly:
 				return 0, errDeletedAgentReportOnly
+			case deletedAgentStateOnly:
+				return 0, errDeletedAgentStateOnly
 			}
 			return 0, status.Error(codes.Unauthenticated, "server UUID has been deleted")
 		}

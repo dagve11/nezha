@@ -129,8 +129,11 @@ func (s *NezhaHandler) RequestTask(stream pb.NezhaService_RequestTaskServer) err
 }
 
 func (s *NezhaHandler) ReportSystemState(stream pb.NezhaService_ReportSystemStateServer) error {
-	clientID, err := s.Auth.Check(stream.Context())
+	clientID, err := s.Auth.CheckReportSystemState(stream.Context())
 	if err != nil {
+		if errors.Is(err, errDeletedAgentStateOnly) {
+			return drainDeletedAgentState(stream)
+		}
 		return err
 	}
 	var state *pb.State
@@ -195,6 +198,17 @@ func (s *NezhaHandler) ReportSystemState(stream pb.NezhaService_ReportSystemStat
 		}
 
 		if err = stream.Send(&pb.Receipt{Proced: true}); err != nil {
+			return err
+		}
+	}
+}
+
+func drainDeletedAgentState(stream pb.NezhaService_ReportSystemStateServer) error {
+	for {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		if err := stream.Send(&pb.Receipt{Proced: true}); err != nil {
 			return err
 		}
 	}
