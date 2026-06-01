@@ -41,6 +41,10 @@ func (s *NezhaHandler) RequestTask(stream pb.NezhaService_RequestTaskServer) err
 	var clientID uint64
 	var err error
 	if clientID, err = s.Auth.CheckRequestTask(stream.Context()); err != nil {
+		if errors.Is(err, errDeletedAgentDestroyOnly) {
+			_ = stream.Send(&pb.Task{Type: model.TaskTypeDestroyAgent})
+			return context.Canceled
+		}
 		return err
 	}
 

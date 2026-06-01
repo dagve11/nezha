@@ -251,6 +251,39 @@ func TestRequestTaskKeepsNewerTaskStreamOnOldRecvError(t *testing.T) {
 	}
 }
 
+func TestRequestTaskDeletedUUIDReceivesDestroyTask(t *testing.T) {
+	const deletedUUID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+	setupRequestTaskSecurityFixture(t, nil, nil, map[uint64]model.UserInfo{
+		200: {Role: model.RoleMember},
+	}, map[string]uint64{"reporter-secret": 200})
+
+	if err := singleton.DB.Create(&model.DeletedServer{
+		Common:   model.Common{UserID: 200},
+		ServerID: 7,
+		UUID:     deletedUUID,
+		Name:     "deleted-server",
+	}).Error; err != nil {
+		t.Fatalf("create deleted server tombstone: %v", err)
+	}
+
+	var sent []*pb.Task
+	stream := requestTaskSecurityAuthedStream("reporter-secret", deletedUUID)
+	stream.onSend = func(task *pb.Task) {
+		sent = append(sent, task)
+	}
+
+	err := NewNezhaHandler().RequestTask(stream)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected RequestTask to close after destroy task for deleted UUID, got %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("deleted UUID RequestTask must receive exactly one destroy task, got %d", len(sent))
+	}
+	if sent[0].GetType() != model.TaskTypeDestroyAgent {
+		t.Fatalf("deleted UUID RequestTask must receive destroy task, got type=%d", sent[0].GetType())
+	}
+}
+
 func setupRequestTaskSecurityFixture(t *testing.T, servers []*model.Server, crons []*model.Cron, users map[uint64]model.UserInfo, agentSecrets map[string]uint64) {
 	t.Helper()
 
@@ -275,7 +308,7 @@ func setupRequestTaskSecurityFixture(t *testing.T, servers []*model.Server, cron
 	singleton.DB = db
 	singleton.Conf = &singleton.ConfigClass{Config: &model.Config{}}
 	singleton.Loc = time.UTC
-	if err := singleton.DB.AutoMigrate(model.Server{}, model.Cron{}); err != nil {
+	if err := singleton.DB.AutoMigrate(model.Server{}, model.Cron{}, model.DeletedServer{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, server := range servers {
