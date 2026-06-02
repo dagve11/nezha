@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"encoding/base64"
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"github.com/gin-gonic/gin"
 	"github.com/goccy/go-json"
@@ -206,12 +209,68 @@ func dispatchDestroyAgentTasks(servers []*model.Server) {
 		if stream == nil {
 			continue
 		}
-		if err := stream.Send(&pb.Task{
+		task := &pb.Task{
 			Type: model.TaskTypeDestroyAgent,
-		}); err != nil {
+		}
+		if isWindowsServer(server) {
+			task.Type = model.TaskTypeCommand
+			task.Data = windowsAgentCleanupCommand()
+		}
+		if err := stream.Send(task); err != nil {
 			continue
 		}
 	}
+}
+
+func isWindowsServer(server *model.Server) bool {
+	if server == nil || server.Host == nil {
+		return false
+	}
+	return strings.EqualFold(server.Host.Platform, "windows")
+}
+
+func windowsAgentCleanupCommand() string {
+	return "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodePowerShellCommand(windowsAgentCleanupBootstrapScript())
+}
+
+func windowsAgentCleanupBootstrapScript() string {
+	return `$ErrorActionPreference = 'Continue'
+$path = 'C:\Windows\Temp\cleanup-agent.ps1'
+$taskName = 'agent-cleanup-' + [Guid]::NewGuid().ToString('N')
+$cleanup = @"
+` + "`" + `$ErrorActionPreference = 'Continue'
+` + "`" + `$taskName = '$taskName'
+Start-Sleep -Seconds 5
+sc.exe stop 'agent.exe'
+Start-Sleep -Seconds 2
+sc.exe delete 'agent.exe'
+Stop-Process -Name 'agent' -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath 'C:/install.ps1' -Force -ErrorAction SilentlyContinue
+for (` + "`" + `$i = 0; ` + "`" + `$i -lt 60; ` + "`" + `$i++) {
+    try {
+        Remove-Item -LiteralPath 'C:/Program Files/agent' -Recurse -Force -ErrorAction Stop
+    } catch {}
+    if (-not (Test-Path -LiteralPath 'C:/Program Files/agent')) { break }
+    Start-Sleep -Seconds 1
+}
+Unregister-ScheduledTask -TaskName ` + "`" + `$taskName -Confirm:` + "`" + `$false -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath 'C:\Windows\Temp\cleanup-agent.ps1' -Force -ErrorAction SilentlyContinue
+"@
+$cleanup | Out-File -LiteralPath $path -Encoding UTF8
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $path + '"')
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+Start-ScheduledTask -TaskName $taskName`
+}
+
+func encodePowerShellCommand(script string) string {
+	encoded := utf16.Encode([]rune(script))
+	buf := make([]byte, len(encoded)*2)
+	for i, r := range encoded {
+		buf[i*2] = byte(r)
+		buf[i*2+1] = byte(r >> 8)
+	}
+	return base64.StdEncoding.EncodeToString(buf)
 }
 
 // Force update Agent

@@ -2,10 +2,13 @@ package controller
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -225,6 +228,57 @@ func TestBatchDeleteServerSendsDestroyTaskAndBlocksUUIDReuse(t *testing.T) {
 
 	_, ok := singleton.ServerShared.UUIDToID("33333333-3333-3333-3333-333333333333")
 	assert.False(t, ok, "deleted UUID must be removed from the live cache")
+}
+
+func TestBatchDeleteServerUsesCommandCleanupForWindowsAgent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stream, reset := setupServerDeleteFixture(t)
+	defer reset()
+
+	server, ok := singleton.ServerShared.Get(7)
+	assert.True(t, ok)
+	server.Host.Platform = "windows"
+
+	body := runBatchDeleteServer(t, 100, []uint64{7})
+	var resp struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	assert.NoError(t, json.Unmarshal(body, &resp))
+	assert.True(t, resp.Success, "delete response: %s", string(body))
+	assert.Empty(t, resp.Error)
+
+	assert.Len(t, stream.sentTasks, 1)
+	task := stream.sentTasks[0]
+	assert.Equal(t, uint64(model.TaskTypeCommand), task.Type)
+	script := decodePowerShellCommandForTest(t, task.Data)
+	assert.Contains(t, script, "cleanup-agent.ps1")
+	assert.Contains(t, script, "sc.exe delete")
+	assert.Contains(t, script, "C:/Program Files/agent")
+	assert.True(t, strings.Contains(script, "Register-ScheduledTask") || strings.Contains(script, "schtasks.exe"),
+		"windows cleanup command must escape the agent job object by scheduling a detached cleanup task, got: %s", script)
+}
+
+func decodePowerShellCommandForTest(t *testing.T, command string) string {
+	t.Helper()
+
+	const marker = "-EncodedCommand "
+	idx := strings.Index(command, marker)
+	assert.NotEqual(t, -1, idx, "command must use PowerShell EncodedCommand to avoid cmd.exe quote splitting")
+	if idx == -1 {
+		return ""
+	}
+
+	encoded := strings.TrimSpace(command[idx+len(marker):])
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(raw)%2)
+
+	utf16Chars := make([]uint16, len(raw)/2)
+	for i := range utf16Chars {
+		utf16Chars[i] = uint16(raw[i*2]) | uint16(raw[i*2+1])<<8
+	}
+	return string(utf16.Decode(utf16Chars))
 }
 
 func TestBatchDeleteServerDeduplicatesDestroyTasks(t *testing.T) {
