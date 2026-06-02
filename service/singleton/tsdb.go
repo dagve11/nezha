@@ -10,6 +10,33 @@ import (
 
 var TSDBShared *tsdb.TSDB
 
+const DefaultTSDBDataPath = "data/tsdb"
+
+func SetTSDBEnabled(enabled bool) {
+	Conf.TSDB.Enabled = enabled
+	if enabled && Conf.TSDB.DataPath == "" {
+		Conf.TSDB.DataPath = DefaultTSDBDataPath
+	}
+	if !enabled {
+		Conf.TSDB.DataPath = ""
+	}
+}
+
+func ApplyTSDBConfig() error {
+	if Conf.TSDB.Enabled || Conf.TSDB.DataPath != "" {
+		if TSDBEnabled() {
+			return nil
+		}
+		return InitTSDB()
+	}
+
+	CloseTSDB()
+	if DB != nil {
+		return DB.AutoMigrate(model.ServiceHistory{})
+	}
+	return nil
+}
+
 func InitTSDB() error {
 	config := &tsdb.Config{
 		RetentionDays:      30,
@@ -19,6 +46,8 @@ func InitTSDB() error {
 
 	if Conf.TSDB.DataPath != "" {
 		config.DataPath = Conf.TSDB.DataPath
+	} else if Conf.TSDB.Enabled {
+		config.DataPath = DefaultTSDBDataPath
 	}
 	if Conf.TSDB.RetentionDays > 0 {
 		config.RetentionDays = Conf.TSDB.RetentionDays

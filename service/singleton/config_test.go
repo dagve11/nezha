@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+
 	"github.com/nezhahq/nezha/model"
 )
 
@@ -50,5 +53,69 @@ func TestInitConfigFromPathRotatesJWTSecretKey(t *testing.T) {
 	}
 	if !strings.Contains(string(saved), "jwt_secret_key_last_rotated_version: v2.0.13") {
 		t.Fatalf("saved config did not persist jwt secret key marker: %s", saved)
+	}
+}
+
+func TestSetTSDBEnabledUsesDefaultPathWhenEnabling(t *testing.T) {
+	originalConf := Conf
+	Conf = &ConfigClass{Config: &model.Config{}}
+	t.Cleanup(func() { Conf = originalConf })
+
+	SetTSDBEnabled(true)
+
+	if !Conf.TSDB.Enabled {
+		t.Fatal("TSDB enabled flag was not set")
+	}
+	if Conf.TSDB.DataPath != DefaultTSDBDataPath {
+		t.Fatalf("TSDB data path = %q, want %q", Conf.TSDB.DataPath, DefaultTSDBDataPath)
+	}
+}
+
+func TestSetTSDBEnabledClearsPathWhenDisabling(t *testing.T) {
+	originalConf := Conf
+	Conf = &ConfigClass{Config: &model.Config{
+		TSDB: model.TSDBConf{
+			Enabled:  true,
+			DataPath: "data/tsdb",
+		},
+	}}
+	t.Cleanup(func() { Conf = originalConf })
+
+	SetTSDBEnabled(false)
+
+	if Conf.TSDB.Enabled {
+		t.Fatal("TSDB enabled flag was not cleared")
+	}
+	if Conf.TSDB.DataPath != "" {
+		t.Fatalf("TSDB data path = %q, want empty", Conf.TSDB.DataPath)
+	}
+}
+
+func TestApplyTSDBConfigRestoresLegacyServiceHistoryTableWhenDisabling(t *testing.T) {
+	originalConf := Conf
+	originalDB := DB
+	originalTSDB := TSDBShared
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	DB = db
+	TSDBShared = nil
+	Conf = &ConfigClass{Config: &model.Config{
+		TSDB: model.TSDBConf{
+			Enabled: false,
+		},
+	}}
+	t.Cleanup(func() {
+		Conf = originalConf
+		DB = originalDB
+		TSDBShared = originalTSDB
+	})
+
+	if err := ApplyTSDBConfig(); err != nil {
+		t.Fatalf("apply TSDB config: %v", err)
+	}
+	if !DB.Migrator().HasTable(&model.ServiceHistory{}) {
+		t.Fatal("service_histories table was not restored after disabling TSDB")
 	}
 }

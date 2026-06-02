@@ -107,6 +107,14 @@ func updateConfig(c *gin.Context) (any, error) {
 	singleton.Conf.AgentRealIPHeader = sf.AgentRealIPHeader
 	singleton.Conf.AgentTLS = sf.AgentTLS
 	singleton.Conf.UserTemplate = sf.UserTemplate
+	if sf.TSDBEnabled != nil {
+		oldTSDB := singleton.Conf.TSDB
+		singleton.SetTSDBEnabled(*sf.TSDBEnabled)
+		if err := singleton.ApplyTSDBConfig(); err != nil {
+			singleton.Conf.TSDB = oldTSDB
+			return nil, err
+		}
+	}
 
 	if err := singleton.Conf.Save(); err != nil {
 		return nil, newGormError("%v", err)

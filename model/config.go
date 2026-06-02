@@ -105,6 +105,7 @@ type HTTPSConf struct {
 
 // TSDBConf TSDB 配置
 type TSDBConf struct {
+	Enabled                  bool    `koanf:"enabled" json:"enabled,omitempty"`
 	DataPath                 string  `koanf:"data_path" json:"data_path,omitempty"`
 	RetentionDays            uint16  `koanf:"retention_days" json:"retention_days,omitempty"`
 	MinFreeDiskSpaceGB       float64 `koanf:"min_free_disk_space_gb" json:"min_free_disk_space_gb,omitempty"`
