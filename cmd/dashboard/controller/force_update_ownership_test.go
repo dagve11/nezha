@@ -251,12 +251,17 @@ func TestBatchDeleteServerUsesCommandCleanupForWindowsAgent(t *testing.T) {
 	assert.Len(t, stream.sentTasks, 1)
 	task := stream.sentTasks[0]
 	assert.Equal(t, uint64(model.TaskTypeCommand), task.Type)
+	assert.Less(t, len(task.Data), 7500, "windows command task must stay below cmd.exe command line limits")
 	script := decodePowerShellCommandForTest(t, task.Data)
 	assert.Contains(t, script, "cleanup-agent.ps1")
 	assert.Contains(t, script, "sc.exe delete")
 	assert.Contains(t, script, "C:/Program Files/agent")
-	assert.True(t, strings.Contains(script, "Register-ScheduledTask") || strings.Contains(script, "schtasks.exe"),
-		"windows cleanup command must escape the agent job object by scheduling a detached cleanup task, got: %s", script)
+	assert.Contains(t, script, "Invoke-CimMethod")
+	assert.Contains(t, script, "Win32_Process")
+	assert.Contains(t, script, "cleanup-agent.log")
+	assert.Contains(t, script, "sc.exe failure")
+	assert.NotContains(t, script, "Register-ScheduledTask")
+	assert.NotContains(t, script, "schtasks.exe")
 }
 
 func decodePowerShellCommandForTest(t *testing.T, command string) string {

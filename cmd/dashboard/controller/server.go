@@ -236,31 +236,40 @@ func windowsAgentCleanupCommand() string {
 func windowsAgentCleanupBootstrapScript() string {
 	return `$ErrorActionPreference = 'Continue'
 $path = 'C:\Windows\Temp\cleanup-agent.ps1'
-$taskName = 'agent-cleanup-' + [Guid]::NewGuid().ToString('N')
-$cleanup = @"
-` + "`" + `$ErrorActionPreference = 'Continue'
-` + "`" + `$taskName = '$taskName'
+$cleanup = @'
+$ErrorActionPreference = 'Continue'
+$serviceName = 'agent.exe'
+$installDir = 'C:/Program Files/agent'
+$logPath = 'C:/Windows/Temp/cleanup-agent.log'
+function Write-Log([string]$Message) { Add-Content -LiteralPath $logPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message" }
+function Run-Step([string]$Name, [scriptblock]$Block) { Write-Log $Name; try { & $Block 2>&1 | ForEach-Object { Write-Log $_.ToString() } } catch { Write-Log $_.Exception.Message } }
 Start-Sleep -Seconds 5
-sc.exe stop 'agent.exe'
-Start-Sleep -Seconds 2
-sc.exe delete 'agent.exe'
-Stop-Process -Name 'agent' -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath 'C:/install.ps1' -Force -ErrorAction SilentlyContinue
-for (` + "`" + `$i = 0; ` + "`" + `$i -lt 60; ` + "`" + `$i++) {
-    try {
-        Remove-Item -LiteralPath 'C:/Program Files/agent' -Recurse -Force -ErrorAction Stop
-    } catch {}
-    if (-not (Test-Path -LiteralPath 'C:/Program Files/agent')) { break }
-    Start-Sleep -Seconds 1
+Write-Log "cleanup start as $(whoami)"
+Run-Step 'clear service restart action' { sc.exe failure $serviceName reset= 0 actions= ""; sc.exe failureflag $serviceName 0 }
+Run-Step 'stop service' { sc.exe stop $serviceName }
+for ($i = 0; $i -lt 30; $i++) {
+    $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+    if (-not $service -or $service.State -eq 'Stopped') { break }
+    Start-Sleep -Milliseconds 500
 }
-Unregister-ScheduledTask -TaskName ` + "`" + `$taskName -Confirm:` + "`" + `$false -ErrorAction SilentlyContinue
+$service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+if ($service -and $service.ProcessId -gt 0) {
+    $agentPid = $service.ProcessId
+    Run-Step "kill service process $agentPid" { Stop-Process -Id $agentPid -Force -ErrorAction SilentlyContinue; taskkill.exe /PID $agentPid /F }
+}
+Run-Step 'delete service' { sc.exe delete $serviceName }
+Run-Step 'remove installer' { Remove-Item -LiteralPath 'C:/install.ps1' -Force -ErrorAction SilentlyContinue }
+for ($i = 0; $i -lt 80; $i++) {
+    try { Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction Stop } catch { Write-Log "remove install dir failed: $($_.Exception.Message)" }
+    if (-not (Test-Path -LiteralPath $installDir)) { break }
+    Start-Sleep -Milliseconds 500
+}
+Write-Log "cleanup finished; install dir exists=$(Test-Path -LiteralPath $installDir)"
 Remove-Item -LiteralPath 'C:\Windows\Temp\cleanup-agent.ps1' -Force -ErrorAction SilentlyContinue
-"@
+'@
 $cleanup | Out-File -LiteralPath $path -Encoding UTF8
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $path + '"')
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
-Start-ScheduledTask -TaskName $taskName`
+$commandLine = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $path + '"'
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine } | Out-Null`
 }
 
 func encodePowerShellCommand(script string) string {
