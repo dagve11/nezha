@@ -264,6 +264,28 @@ func TestBatchDeleteServerUsesCommandCleanupForWindowsAgent(t *testing.T) {
 	assert.NotContains(t, script, "schtasks.exe")
 }
 
+func TestBatchDeleteServerUsesCommandCleanupForGopsutilWindowsPlatform(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stream, reset := setupServerDeleteFixture(t)
+	defer reset()
+
+	server, ok := singleton.ServerShared.Get(7)
+	assert.True(t, ok)
+	server.Host.Platform = "Microsoft Windows 11 Pro"
+
+	body := runBatchDeleteServer(t, 100, []uint64{7})
+	var resp struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	assert.NoError(t, json.Unmarshal(body, &resp))
+	assert.True(t, resp.Success, "delete response: %s", string(body))
+	assert.Empty(t, resp.Error)
+
+	assert.Len(t, stream.sentTasks, 1)
+	assert.Equal(t, uint64(model.TaskTypeCommand), stream.sentTasks[0].Type)
+}
+
 func decodePowerShellCommandForTest(t *testing.T, command string) string {
 	t.Helper()
 

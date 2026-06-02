@@ -226,7 +226,7 @@ func isWindowsServer(server *model.Server) bool {
 	if server == nil || server.Host == nil {
 		return false
 	}
-	return strings.EqualFold(server.Host.Platform, "windows")
+	return strings.Contains(strings.ToLower(server.Host.Platform), "windows")
 }
 
 func windowsAgentCleanupCommand() string {
