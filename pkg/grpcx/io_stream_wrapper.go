@@ -3,6 +3,7 @@ package grpcx
 import (
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/nezhahq/nezha/proto"
@@ -19,6 +20,7 @@ type IOStream interface {
 type IOStreamWrapper struct {
 	IOStream
 	dataBuf []byte
+	writeMu sync.Mutex
 	closed  *atomic.Bool
 	closeCh chan struct{}
 }
@@ -49,6 +51,8 @@ func (iw *IOStreamWrapper) Read(p []byte) (n int, err error) {
 }
 
 func (iw *IOStreamWrapper) Write(p []byte) (n int, err error) {
+	iw.writeMu.Lock()
+	defer iw.writeMu.Unlock()
 	err = iw.Send(&proto.IOStreamData{Data: p})
 	return len(p), err
 }

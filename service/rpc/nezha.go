@@ -300,20 +300,25 @@ func (s *NezhaHandler) IOStream(stream pb.NezhaService_IOStreamServer) error {
 		return fmt.Errorf("stream not authorized for agent")
 	}
 
-	go func() {
-		for {
-			if err := stream.Send(&pb.IOStreamData{Data: []byte{}}); err != nil {
-				log.Printf("NEZHA>> IOStream keepAlive error: %v\n", err)
-				return
-			}
-			time.Sleep(time.Second * 30)
-		}
-	}()
-
 	if _, err := s.GetStream(streamId); err != nil {
 		return err
 	}
 	iw := grpcx.NewIOStreamWrapper(stream)
+	go func() {
+		ticker := time.NewTicker(time.Second * 30)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stream.Context().Done():
+				return
+			case <-ticker.C:
+				if _, err := iw.Write([]byte{}); err != nil {
+					log.Printf("NEZHA>> IOStream keepAlive error: %v\n", err)
+					return
+				}
+			}
+		}
+	}()
 	if err := s.AgentConnected(streamId, iw); err != nil {
 		return err
 	}
