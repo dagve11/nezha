@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log"
@@ -24,6 +26,10 @@ import (
 	"github.com/nezhahq/nezha/pkg/utils"
 	"github.com/nezhahq/nezha/service/singleton"
 )
+
+const defaultFrontendTitle = "哪吒监控 Nezha Monitoring"
+
+var frontendTitleTagPattern = regexp.MustCompile(`(?is)<title>.*?</title>`)
 
 func ServeWeb(frontendDist fs.FS) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
@@ -323,6 +329,18 @@ func getUid(c *gin.Context) uint64 {
 	return user.ID
 }
 
+func frontendIndexTitle() string {
+	title := defaultFrontendTitle
+	if singleton.Conf != nil && strings.TrimSpace(singleton.Conf.SiteName) != "" {
+		title = strings.TrimSpace(singleton.Conf.SiteName)
+	}
+	return "<title>" + html.EscapeString(title) + "</title>"
+}
+
+func injectFrontendIndexTitle(content []byte) []byte {
+	return frontendTitleTagPattern.ReplaceAll(content, []byte(frontendIndexTitle()))
+}
+
 func fallbackToFrontend(frontendDist fs.FS) func(*gin.Context) {
 	serveFile := func(c *gin.Context, name string, file fs.File, customStatusCode int) bool {
 		defer file.Close()
@@ -336,6 +354,14 @@ func fallbackToFrontend(frontendDist fs.FS) func(*gin.Context) {
 		readSeeker, ok := file.(io.ReadSeeker)
 		if !ok {
 			return false
+		}
+		if name == "index.html" {
+			content, err := io.ReadAll(readSeeker)
+			if err != nil {
+				return false
+			}
+			http.ServeContent(utils.NewGinCustomWriter(c, customStatusCode), c.Request, name, fileStat.ModTime(), bytes.NewReader(injectFrontendIndexTitle(content)))
+			return true
 		}
 		http.ServeContent(utils.NewGinCustomWriter(c, customStatusCode), c.Request, name, fileStat.ModTime(), readSeeker)
 		return true

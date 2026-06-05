@@ -28,9 +28,9 @@ func newFrontendFallbackTestRouter(t *testing.T) *gin.Engine {
 	}}
 	t.Cleanup(func() { singleton.Conf = originalConf })
 
-	writeFrontendFallbackTestFile(t, "admin-dist/index.html", "<html>admin index</html>")
+	writeFrontendFallbackTestFile(t, "admin-dist/index.html", "<html><head><title>哪吒监控 Nezha Monitoring</title></head><body>admin index</body></html>")
 	writeFrontendFallbackTestFile(t, "admin-dist/assets/app.js", "console.log('admin asset')")
-	writeFrontendFallbackTestFile(t, "user-dist/index.html", "<html>user index</html>")
+	writeFrontendFallbackTestFile(t, "user-dist/index.html", "<html><head><title>哪吒监控 Nezha Monitoring</title></head><body>user index</body></html>")
 	writeFrontendFallbackTestFile(t, "data/config.yaml", "jwt_secret_key: traversal-secret")
 
 	r := gin.New()
@@ -129,5 +129,31 @@ func TestFallbackToFrontendPreservesDashboardRoutes(t *testing.T) {
 	w = performFrontendFallbackRequest(t, router, "/dashboard/assets/app.js")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "admin asset") {
 		t.Fatalf("/dashboard/assets/app.js status = %d body = %q, want admin asset", w.Code, w.Body.String())
+	}
+}
+
+func TestFallbackToFrontendInjectsConfiguredSiteNameIntoIndexTitle(t *testing.T) {
+	t.Chdir(t.TempDir())
+	router := newFrontendFallbackTestRouter(t)
+	singleton.Conf.SiteName = `AG666 & "Prod"`
+
+	tests := []string{
+		"/",
+		"/server/1",
+		"/dashboard/",
+		"/dashboard/service",
+	}
+
+	for _, target := range tests {
+		t.Run(target, func(t *testing.T) {
+			w := performFrontendFallbackRequest(t, router, target)
+			body := w.Body.String()
+			if !strings.Contains(body, `<title>AG666 &amp; &#34;Prod&#34;</title>`) {
+				t.Fatalf("%s body = %q, want configured escaped site title", target, body)
+			}
+			if strings.Contains(body, "<title>哪吒监控 Nezha Monitoring</title>") {
+				t.Fatalf("%s body kept default title: %q", target, body)
+			}
+		})
 	}
 }
