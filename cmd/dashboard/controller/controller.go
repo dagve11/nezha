@@ -409,6 +409,7 @@ func fallbackToFrontend(frontendDist fs.FS) func(*gin.Context) {
 		regexp.MustCompile(`^/dashboard/alert-rule$`),
 		regexp.MustCompile(`^/dashboard/ddns$`),
 		regexp.MustCompile(`^/dashboard/nat$`),
+		regexp.MustCompile(`^/dashboard/terminal/\d+$`),
 		regexp.MustCompile(`^/dashboard/server-group$`),
 		regexp.MustCompile(`^/dashboard/notification-group$`),
 		regexp.MustCompile(`^/dashboard/profile$`),

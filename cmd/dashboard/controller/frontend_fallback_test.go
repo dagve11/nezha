@@ -130,6 +130,11 @@ func TestFallbackToFrontendPreservesDashboardRoutes(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "admin asset") {
 		t.Fatalf("/dashboard/assets/app.js status = %d body = %q, want admin asset", w.Code, w.Body.String())
 	}
+
+	w = performFrontendFallbackRequest(t, router, "/dashboard/terminal/10")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "admin index") {
+		t.Fatalf("/dashboard/terminal/10 status = %d body = %q, want admin index", w.Code, w.Body.String())
+	}
 }
 
 func TestFallbackToFrontendInjectsConfiguredSiteNameIntoIndexTitle(t *testing.T) {
