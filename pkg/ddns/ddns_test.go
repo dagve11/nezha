@@ -2,7 +2,12 @@ package ddns
 
 import (
 	"context"
+	"net/netip"
 	"testing"
+
+	"github.com/libdns/libdns"
+	"github.com/nezhahq/nezha/model"
+	"github.com/stretchr/testify/require"
 )
 
 type testSt struct {
@@ -44,4 +49,36 @@ func TestSplitDomainSOA(t *testing.T) {
 			t.Fatalf("Expected zone %s, but got %s", c.zone, zone)
 		}
 	}
+}
+
+type recordingSetter struct {
+	records []libdns.Record
+}
+
+func (s *recordingSetter) SetRecords(_ context.Context, _ string, records []libdns.Record) ([]libdns.Record, error) {
+	s.records = records
+	return records, nil
+}
+
+func TestProviderSetsMultipleAddressRecords(t *testing.T) {
+	enableIPv4 := true
+	setter := &recordingSetter{}
+	provider := &Provider{
+		DDNSProfile: &model.DDNSProfile{
+			Provider:   model.ProviderDummy,
+			EnableIPv4: &enableIPv4,
+			MaxRetries: 1,
+		},
+		IPRecords: &IPRecords{IPv4Addrs: []string{"1.0.0.1", "1.1.1.1"}},
+		Setter:    setter,
+	}
+
+	err := provider.updateDomain(context.Background(), "cdn.example.com")
+	require.NoError(t, err)
+	require.Len(t, setter.records, 2)
+
+	first := setter.records[0].(libdns.Address)
+	second := setter.records[1].(libdns.Address)
+	require.Equal(t, netip.MustParseAddr("1.0.0.1"), first.IP)
+	require.Equal(t, netip.MustParseAddr("1.1.1.1"), second.IP)
 }

@@ -150,6 +150,9 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.PATCH("/ddns/:id", commonHandler(updateDDNS))
 	auth.POST("/batch-delete/ddns", commonHandler(batchDeleteDDNS))
 
+	auth.POST("/bestip/fission", commonHandler(runBestIPFission))
+	auth.POST("/bestip/dns", commonHandler(writeBestIPDNS))
+
 	auth.GET("/nat", listHandler(listNAT))
 	auth.POST("/nat", commonHandler(createNAT))
 	auth.PATCH("/nat/:id", commonHandler(updateNAT))
@@ -408,6 +411,7 @@ func fallbackToFrontend(frontendDist fs.FS) func(*gin.Context) {
 		regexp.MustCompile(`^/dashboard/notification$`),
 		regexp.MustCompile(`^/dashboard/alert-rule$`),
 		regexp.MustCompile(`^/dashboard/ddns$`),
+		regexp.MustCompile(`^/dashboard/bestip$`),
 		regexp.MustCompile(`^/dashboard/nat$`),
 		regexp.MustCompile(`^/dashboard/terminal/\d+$`),
 		regexp.MustCompile(`^/dashboard/server-group$`),
