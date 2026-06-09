@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/jinzhu/copier"
 	geoipx "github.com/nezhahq/nezha/pkg/geoip"
 	"github.com/nezhahq/nezha/pkg/grpcx"
@@ -24,16 +25,21 @@ var _ pb.NezhaServiceServer = (*NezhaHandler)(nil)
 var NezhaHandlerSingleton *NezhaHandler
 
 type NezhaHandler struct {
-	Auth          *authHandler
-	ioStreams     map[string]*ioStreamContext
-	ioStreamMutex *sync.RWMutex
+	Auth             *authHandler
+	ioStreams        map[string]*ioStreamContext
+	vpnRelays        map[string]*vpnRelayContext
+	vpnRelayByStream map[string]string
+	vpnRelayReporter func(VPNRelayReport) bool
+	ioStreamMutex    *sync.RWMutex
 }
 
 func NewNezhaHandler() *NezhaHandler {
 	return &NezhaHandler{
-		Auth:          &authHandler{},
-		ioStreamMutex: new(sync.RWMutex),
-		ioStreams:     make(map[string]*ioStreamContext),
+		Auth:             &authHandler{},
+		ioStreamMutex:    new(sync.RWMutex),
+		ioStreams:        make(map[string]*ioStreamContext),
+		vpnRelays:        make(map[string]*vpnRelayContext),
+		vpnRelayByStream: make(map[string]string),
 	}
 }
 
@@ -57,6 +63,11 @@ func (s *NezhaHandler) RequestTask(stream pb.NezhaService_RequestTaskServer) err
 	// re-delivery point that closes the offline-during-transfer gap.
 	if singleton.ServerTransferShared != nil {
 		singleton.ServerTransferShared.OnAgentReconnect(clientID)
+	}
+	if singleton.VPNShared != nil {
+		if err := singleton.VPNShared.OnAgentReconnect(clientID); err != nil {
+			log.Printf("NEZHA>> VPN reconnect status dispatch failed: clientID=%d err=%v", clientID, err)
+		}
 	}
 	var result *pb.TaskResult
 	for {
@@ -115,6 +126,18 @@ func (s *NezhaHandler) RequestTask(stream pb.NezhaService_RequestTaskServer) err
 			}
 			if _, err := singleton.ServerTransferShared.MarkFailed(result.GetId(), result.GetData()); err != nil {
 				log.Printf("NEZHA>> ServerTransfer MarkFailed(%d) failed: %v", result.GetId(), err)
+			}
+		case model.TaskTypeVPNControl:
+			if singleton.VPNShared == nil {
+				continue
+			}
+			var vpnResult model.VPNControlResult
+			if err := json.Unmarshal([]byte(result.GetData()), &vpnResult); err != nil {
+				log.Printf("NEZHA>> VPNControl result ignored: clientID=%d invalid payload: %v", clientID, err)
+				continue
+			}
+			if _, err := singleton.VPNShared.HandleControlResult(clientID, vpnResult); err != nil {
+				log.Printf("NEZHA>> VPNControl result ignored: clientID=%d session=%s role=%s: %v", clientID, vpnResult.SessionID, vpnResult.Role, err)
 			}
 		default:
 			if model.IsServiceSentinelNeeded(result.GetType()) {
@@ -296,6 +319,17 @@ func (s *NezhaHandler) IOStream(stream pb.NezhaService_IOStreamServer) error {
 	// 开放（任何获得 streamId 的 agent 都能抢答），构成 session-hijack RCE 中介。
 	// 这是 commit 6661d6a（user 侧归属校验）的对偶补丁。先校验后启 keepalive，
 	// 避免未授权 agent 触发悬空 goroutine 持续向其发心跳。
+	if s.IsVPNStreamAuthorizedForAgent(streamId, clientID) {
+		iw := grpcx.NewIOStreamWrapper(stream)
+		if err := s.VPNAgentConnected(streamId, clientID, iw); err != nil {
+			return err
+		}
+		if sessionID, ok := s.VPNRelaySessionForStream(streamId); ok {
+			s.MaybeStartVPNRelay(sessionID)
+		}
+		iw.Wait()
+		return nil
+	}
 	if !s.IsStreamAuthorizedForAgent(streamId, clientID) {
 		return fmt.Errorf("stream not authorized for agent")
 	}

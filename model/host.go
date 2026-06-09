@@ -98,63 +98,86 @@ func PB2State(s *pb.State) HostState {
 }
 
 type Host struct {
-	Platform        string   `json:"platform,omitempty"`
-	PlatformVersion string   `json:"platform_version,omitempty"`
-	CPU             []string `json:"cpu,omitempty"`
-	MemTotal        uint64   `json:"mem_total,omitempty"`
-	DiskTotal       uint64   `json:"disk_total,omitempty"`
-	SwapTotal       uint64   `json:"swap_total,omitempty"`
-	Arch            string   `json:"arch,omitempty"`
-	Virtualization  string   `json:"virtualization,omitempty"`
-	BootTime        uint64   `json:"boot_time,omitempty"`
-	Version         string   `json:"version,omitempty"`
-	GPU             []string `json:"gpu,omitempty"`
+	Platform            string   `json:"platform,omitempty"`
+	PlatformVersion     string   `json:"platform_version,omitempty"`
+	CPU                 []string `json:"cpu,omitempty"`
+	MemTotal            uint64   `json:"mem_total,omitempty"`
+	DiskTotal           uint64   `json:"disk_total,omitempty"`
+	SwapTotal           uint64   `json:"swap_total,omitempty"`
+	Arch                string   `json:"arch,omitempty"`
+	Virtualization      string   `json:"virtualization,omitempty"`
+	BootTime            uint64   `json:"boot_time,omitempty"`
+	Version             string   `json:"version,omitempty"`
+	GPU                 []string `json:"gpu,omitempty"`
+	VPNEnabled          bool     `json:"vpn_enabled,omitempty"`
+	VPNAllowSystemProxy bool     `json:"vpn_allow_system_proxy,omitempty"`
+	VPNAllowTun         bool     `json:"vpn_allow_tun,omitempty"`
+	VPNCoreVersion      string   `json:"vpn_core_version,omitempty"`
+	VPNLastError        string   `json:"vpn_last_error,omitempty"`
 }
 
 func (h *Host) PB() *pb.Host {
 	return &pb.Host{
-		Platform:        h.Platform,
-		PlatformVersion: h.PlatformVersion,
-		Cpu:             h.CPU,
-		MemTotal:        h.MemTotal,
-		DiskTotal:       h.DiskTotal,
-		SwapTotal:       h.SwapTotal,
-		Arch:            h.Arch,
-		Virtualization:  h.Virtualization,
-		BootTime:        h.BootTime,
-		Version:         h.Version,
-		Gpu:             h.GPU,
+		Platform:            h.Platform,
+		PlatformVersion:     h.PlatformVersion,
+		Cpu:                 h.CPU,
+		MemTotal:            h.MemTotal,
+		DiskTotal:           h.DiskTotal,
+		SwapTotal:           h.SwapTotal,
+		Arch:                h.Arch,
+		Virtualization:      h.Virtualization,
+		BootTime:            h.BootTime,
+		Version:             h.Version,
+		Gpu:                 h.GPU,
+		VpnEnabled:          h.VPNEnabled,
+		VpnAllowSystemProxy: h.VPNAllowSystemProxy,
+		VpnAllowTun:         h.VPNAllowTun,
+		VpnCoreVersion:      h.VPNCoreVersion,
+		VpnLastError:        h.VPNLastError,
 	}
 }
 
 // Filter returns a new instance of Host with some fields redacted.
 func (h *Host) Filter() *Host {
 	return &Host{
-		Platform:       h.Platform,
-		CPU:            h.CPU,
-		MemTotal:       h.MemTotal,
-		DiskTotal:      h.DiskTotal,
-		SwapTotal:      h.SwapTotal,
-		Arch:           h.Arch,
-		Virtualization: h.Virtualization,
-		BootTime:       h.BootTime,
-		GPU:            h.GPU,
+		Platform:            h.Platform,
+		CPU:                 h.CPU,
+		MemTotal:            h.MemTotal,
+		DiskTotal:           h.DiskTotal,
+		SwapTotal:           h.SwapTotal,
+		Arch:                h.Arch,
+		Virtualization:      h.Virtualization,
+		BootTime:            h.BootTime,
+		GPU:                 h.GPU,
+		VPNEnabled:          h.VPNEnabled,
+		VPNAllowSystemProxy: h.VPNAllowSystemProxy,
+		VPNAllowTun:         h.VPNAllowTun,
+		VPNCoreVersion:      h.VPNCoreVersion,
+		VPNLastError:        h.VPNLastError,
 	}
 }
 
 func PB2Host(h *pb.Host) Host {
+	if h == nil {
+		return Host{}
+	}
 	return Host{
-		Platform:        h.GetPlatform(),
-		PlatformVersion: h.GetPlatformVersion(),
-		CPU:             h.GetCpu(),
-		MemTotal:        h.GetMemTotal(),
-		DiskTotal:       h.GetDiskTotal(),
-		SwapTotal:       h.GetSwapTotal(),
-		Arch:            h.GetArch(),
-		Virtualization:  h.GetVirtualization(),
-		BootTime:        h.GetBootTime(),
-		Version:         h.GetVersion(),
-		GPU:             h.GetGpu(),
+		Platform:            h.GetPlatform(),
+		PlatformVersion:     h.GetPlatformVersion(),
+		CPU:                 h.GetCpu(),
+		MemTotal:            h.GetMemTotal(),
+		DiskTotal:           h.GetDiskTotal(),
+		SwapTotal:           h.GetSwapTotal(),
+		Arch:                h.GetArch(),
+		Virtualization:      h.GetVirtualization(),
+		BootTime:            h.GetBootTime(),
+		Version:             h.GetVersion(),
+		GPU:                 h.GetGpu(),
+		VPNEnabled:          h.GetVpnEnabled(),
+		VPNAllowSystemProxy: h.GetVpnAllowSystemProxy(),
+		VPNAllowTun:         h.GetVpnAllowTun(),
+		VPNCoreVersion:      h.GetVpnCoreVersion(),
+		VPNLastError:        h.GetVpnLastError(),
 	}
 }
 

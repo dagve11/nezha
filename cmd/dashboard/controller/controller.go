@@ -151,12 +151,31 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.POST("/batch-delete/ddns", commonHandler(batchDeleteDDNS))
 
 	auth.POST("/bestip/fission", commonHandler(runBestIPFission))
+	auth.GET("/ws/bestip/fission", commonHandler(streamBestIPFission))
 	auth.POST("/bestip/dns", commonHandler(writeBestIPDNS))
+	auth.POST("/bestip/notify", commonHandler(notifyBestIPResult))
+	auth.GET("/bestip/automation", commonHandler(getBestIPAutomation))
+	auth.POST("/bestip/automation", commonHandler(saveBestIPAutomation))
+	auth.POST("/bestip/automation/run", commonHandler(runBestIPAutomation))
+	auth.POST("/bestip/automation/rollback", commonHandler(rollbackBestIPAutomation))
+	auth.GET("/bestip/automation/history", commonHandler(listBestIPAutomationHistory))
 
 	auth.GET("/nat", listHandler(listNAT))
 	auth.POST("/nat", commonHandler(createNAT))
 	auth.PATCH("/nat/:id", commonHandler(updateNAT))
 	auth.POST("/batch-delete/nat", commonHandler(batchDeleteNAT))
+
+	auth.GET("/vpn/policy", commonHandler(listVPNPolicy))
+	auth.POST("/vpn/policy", commonHandler(createVPNPolicy))
+	auth.PATCH("/vpn/policy/:id", commonHandler(updateVPNPolicy))
+	auth.POST("/batch-delete/vpn/policy", commonHandler(batchDeleteVPNPolicy))
+	auth.GET("/vpn/session", commonHandler(listVPNSession))
+	auth.POST("/vpn/session/start", commonHandler(startVPNSession))
+	auth.POST("/vpn/session/:id/stop", commonHandler(stopVPNSession))
+	auth.POST("/vpn/session/:id/restart", commonHandler(restartVPNSession))
+	auth.POST("/vpn/session/:id/status", commonHandler(statusVPNSession))
+	auth.GET("/ws/vpn/session/:id", commonHandler(vpnSessionStream))
+	auth.GET("/vpn/audit", commonHandler(listVPNAudit))
 
 	auth.GET("/waf", pAdminHandler(listBlockedAddress))
 	auth.POST("/batch-delete/waf", adminHandler(batchDeleteBlockedAddress))
@@ -413,6 +432,7 @@ func fallbackToFrontend(frontendDist fs.FS) func(*gin.Context) {
 		regexp.MustCompile(`^/dashboard/ddns$`),
 		regexp.MustCompile(`^/dashboard/bestip$`),
 		regexp.MustCompile(`^/dashboard/nat$`),
+		regexp.MustCompile(`^/dashboard/vpn$`),
 		regexp.MustCompile(`^/dashboard/terminal/\d+$`),
 		regexp.MustCompile(`^/dashboard/server-group$`),
 		regexp.MustCompile(`^/dashboard/notification-group$`),

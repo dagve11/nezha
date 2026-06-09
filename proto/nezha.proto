@@ -24,6 +24,11 @@ message Host {
   uint64 boot_time = 9;
   string version = 10;
   repeated string gpu = 11;
+  bool vpn_enabled = 12;
+  bool vpn_allow_system_proxy = 13;
+  bool vpn_allow_tun = 14;
+  string vpn_core_version = 15;
+  string vpn_last_error = 16;
 }
 
 message State {
