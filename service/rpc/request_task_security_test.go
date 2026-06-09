@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
 	"google.golang.org/grpc/metadata"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -280,6 +281,150 @@ func TestRequestTaskKeepsNewerTaskStreamOnOldRecvError(t *testing.T) {
 	}
 }
 
+func TestRequestTaskDispatchesVPNControlResult(t *testing.T) {
+	entry := requestTaskSecurityServer(1, 200, "11111111-2222-3333-4444-555555555555")
+	exit := requestTaskSecurityServer(2, 200, "22222222-3333-4444-5555-666666666666")
+	setupRequestTaskSecurityFixture(t, []*model.Server{entry, exit}, nil, map[uint64]model.UserInfo{
+		200: {Role: model.RoleMember},
+	}, map[string]uint64{"agent-secret": 200})
+	setRequestTaskSecurityServerVPNCapability(t, entry.ID)
+	setRequestTaskSecurityServerVPNCapability(t, exit.ID)
+
+	originalTokenGenerator := singleton.VPNTokenGenerator
+	originalIDGenerator := singleton.VPNIDGenerator
+	originalNotificationSender := singleton.VPNNotificationSender
+	singleton.VPNTokenGenerator = func() (string, error) { return "rpc-vpn-token", nil }
+	ids := []string{"rpc_session", "rpc_entry_stream", "rpc_exit_stream"}
+	idIndex := 0
+	singleton.VPNIDGenerator = func(prefix string) (string, error) {
+		id := ids[idIndex%len(ids)]
+		idIndex++
+		return id, nil
+	}
+	singleton.VPNNotificationSender = func(uint64, string, string) {}
+	t.Cleanup(func() {
+		singleton.VPNTokenGenerator = originalTokenGenerator
+		singleton.VPNIDGenerator = originalIDGenerator
+		singleton.VPNNotificationSender = originalNotificationSender
+	})
+
+	entrySent := make(chan *pb.Task, 1)
+	connectRequestTaskSecurityTaskStreamWithSendHook(t, entry.ID, nil, func(task *pb.Task) {
+		entrySent <- task
+	})
+	connectRequestTaskSecurityTaskStream(t, exit.ID)
+	policy, err := singleton.VPNShared.SavePolicy(singleton.VPNActor{UserID: 200, Role: model.RoleMember}, model.AgentVPNPolicyForm{
+		Name:           "rpc vpn",
+		EntryServerID:  entry.ID,
+		ExitServerID:   exit.ID,
+		Mode:           model.VPNModeSystemProxy,
+		RuleMode:       model.VPNRuleModeGlobal,
+		ListenSOCKS:    "127.0.0.1:1080",
+		ExpiresSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatalf("save vpn policy: %v", err)
+	}
+	session, err := singleton.VPNShared.StartSession(singleton.VPNActor{UserID: 200, Role: model.RoleMember}, policy.ID)
+	if err != nil {
+		t.Fatalf("start vpn session: %v", err)
+	}
+
+	resultData, err := json.Marshal(model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRequestTaskSecurityResult(t, "agent-secret", exit.UUID, &pb.TaskResult{
+		Id:         session.ID,
+		Type:       model.TaskTypeVPNControl,
+		Data:       string(resultData),
+		Successful: true,
+	})
+
+	select {
+	case task := <-entrySent:
+		if task.GetType() != model.TaskTypeVPNControl {
+			t.Fatalf("expected VPN control task, got %d", task.GetType())
+		}
+		var req model.VPNControlRequest
+		if err := json.Unmarshal([]byte(task.GetData()), &req); err != nil {
+			t.Fatalf("decode entry start request: %v", err)
+		}
+		if req.SessionID != session.SessionID || req.Role != model.VPNRoleEntry || req.Action != model.VPNActionStart {
+			t.Fatalf("unexpected entry task: %+v", req)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("exit running result must dispatch entry start task")
+	}
+}
+
+func TestRequestTaskQueriesVPNStatusOnAgentReconnect(t *testing.T) {
+	entry := requestTaskSecurityServer(1, 200, "31313131-3131-3131-3131-313131313131")
+	exit := requestTaskSecurityServer(2, 200, "41414141-4141-4141-4141-414141414141")
+	setupRequestTaskSecurityFixture(t, []*model.Server{entry, exit}, nil, map[uint64]model.UserInfo{
+		200: {Role: model.RoleMember},
+	}, map[string]uint64{"entry-secret": 200})
+	setRequestTaskSecurityServerVPNCapability(t, entry.ID)
+	setRequestTaskSecurityServerVPNCapability(t, exit.ID)
+
+	if err := singleton.DB.Create(&model.AgentVPNPolicy{
+		Common:         model.Common{ID: 7, UserID: 200},
+		Name:           "reconnect vpn",
+		EntryServerID:  entry.ID,
+		ExitServerID:   exit.ID,
+		Mode:           model.VPNModeSystemProxy,
+		RuleMode:       model.VPNRuleModeGlobal,
+		ListenSOCKS:    "127.0.0.1:1080",
+		ExpiresSeconds: 3600,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := singleton.DB.Create(&model.AgentVPNSession{
+		Common:        model.Common{ID: 9, UserID: 200},
+		PolicyID:      7,
+		EntryServerID: entry.ID,
+		ExitServerID:  exit.ID,
+		SessionID:     "vpn_reconnect_session",
+		Mode:          model.VPNModeSystemProxy,
+		RelayMode:     model.VPNRelayModeDashboard,
+		State:         model.VPNStateRunning,
+		EntryState:    model.VPNStateRunning,
+		ExitState:     model.VPNStateRunning,
+		EntryStreamID: "vpn_reconnect_entry_stream",
+		ExitStreamID:  "vpn_reconnect_exit_stream",
+		StartedAt:     time.Now().Add(-time.Minute),
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var sent []*pb.Task
+	stream := requestTaskSecurityAuthedStream("entry-secret", entry.UUID)
+	stream.onSend = func(task *pb.Task) {
+		sent = append(sent, task)
+	}
+
+	err := NewNezhaHandler().RequestTask(stream)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected RequestTask to finish after reconnect status send, got %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("agent reconnect must receive one VPN status task, got %d", len(sent))
+	}
+	var req model.VPNControlRequest
+	if err := json.Unmarshal([]byte(sent[0].GetData()), &req); err != nil {
+		t.Fatalf("decode VPN status task: %v", err)
+	}
+	if sent[0].GetType() != model.TaskTypeVPNControl || req.Action != model.VPNActionStatus || req.Role != model.VPNRoleEntry || req.SessionID != "vpn_reconnect_session" {
+		t.Fatalf("unexpected VPN reconnect status task: type=%d req=%+v", sent[0].GetType(), req)
+	}
+}
+
 func TestRequestTaskDeletedUUIDReceivesDestroyTask(t *testing.T) {
 	const deletedUUID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 	setupRequestTaskSecurityFixture(t, nil, nil, map[uint64]model.UserInfo{
@@ -424,6 +569,7 @@ func setupRequestTaskSecurityFixture(t *testing.T, servers []*model.Server, cron
 	originalLoc := singleton.Loc
 	originalServerShared := singleton.ServerShared
 	originalCronShared := singleton.CronShared
+	originalVPNShared := singleton.VPNShared
 	originalUserInfoMap := singleton.UserInfoMap
 	originalAgentSecretToUserID := singleton.AgentSecretToUserId
 
@@ -440,7 +586,7 @@ func setupRequestTaskSecurityFixture(t *testing.T, servers []*model.Server, cron
 	singleton.DB = db
 	singleton.Conf = &singleton.ConfigClass{Config: &model.Config{}}
 	singleton.Loc = time.UTC
-	if err := singleton.DB.AutoMigrate(model.Server{}, model.Cron{}, model.DeletedServer{}); err != nil {
+	if err := singleton.DB.AutoMigrate(model.Server{}, model.Cron{}, model.DeletedServer{}, model.AgentVPNPolicy{}, model.AgentVPNSession{}, model.AgentVPNAuditLog{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, server := range servers {
@@ -460,6 +606,7 @@ func setupRequestTaskSecurityFixture(t *testing.T, servers []*model.Server, cron
 	singleton.UserLock.Unlock()
 	singleton.ServerShared = singleton.NewServerClass()
 	singleton.CronShared = singleton.NewCronClass()
+	singleton.VPNShared = singleton.NewVPNClass()
 
 	t.Cleanup(func() {
 		if singleton.CronShared != nil && singleton.CronShared.Cron != nil {
@@ -471,6 +618,7 @@ func setupRequestTaskSecurityFixture(t *testing.T, servers []*model.Server, cron
 		singleton.Loc = originalLoc
 		singleton.ServerShared = originalServerShared
 		singleton.CronShared = originalCronShared
+		singleton.VPNShared = originalVPNShared
 		singleton.UserLock.Lock()
 		singleton.UserInfoMap = originalUserInfoMap
 		singleton.AgentSecretToUserId = originalAgentSecretToUserID
@@ -483,6 +631,20 @@ func requestTaskSecurityServer(id, userID uint64, uuid string) *model.Server {
 		Common: model.Common{ID: id, UserID: userID},
 		UUID:   uuid,
 		Name:   "request-task-security-server",
+	}
+}
+
+func setRequestTaskSecurityServerVPNCapability(t *testing.T, serverID uint64) {
+	t.Helper()
+	server, ok := singleton.ServerShared.Get(serverID)
+	if !ok || server == nil {
+		t.Fatalf("server %d not found", serverID)
+	}
+	server.Host = &model.Host{
+		VPNEnabled:          true,
+		VPNAllowSystemProxy: true,
+		VPNAllowTun:         true,
+		VPNCoreVersion:      "1.12.0",
 	}
 }
 
