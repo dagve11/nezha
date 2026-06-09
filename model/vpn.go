@@ -3,6 +3,7 @@ package model
 import (
 	"time"
 
+	"github.com/goccy/go-json"
 	"gorm.io/gorm"
 )
 
@@ -243,4 +244,29 @@ func (a *AgentVPNAuditLog) BeforeSave(tx *gorm.DB) error {
 
 func (a *AgentVPNAuditLog) AfterFind(tx *gorm.DB) error {
 	return unmarshalRaw(a.DetailRaw, &a.Detail)
+}
+
+func marshalRaw(value any, raw *string) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	*raw = string(data)
+	return nil
+}
+
+func unmarshalRaw(raw string, value any) error {
+	if raw == "" {
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), value)
+}
+
+func firstJSONError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
