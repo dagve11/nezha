@@ -22,3 +22,20 @@ type BestIPDNSWriteResult struct {
 	Success   bool     `json:"success"`
 	Error     string   `json:"error,omitempty"`
 }
+
+type BestIPNotifyForm struct {
+	NotificationGroupID uint64                   `json:"notification_group_id"`
+	Domains             []string                 `json:"domains,omitempty"`
+	IPv4                string                   `json:"ipv4,omitempty"`
+	IPv6                string                   `json:"ipv6,omitempty"`
+	IPv4Records         []string                 `json:"ipv4_records,omitempty"`
+	IPv6Records         []string                 `json:"ipv6_records,omitempty"`
+	Candidates          []bestip.CandidateResult `json:"candidates,omitempty"`
+	WriteTopN           int                      `json:"write_top_n,omitempty"`
+}
+
+type BestIPNotifyResult struct {
+	Success bool     `json:"success"`
+	IPv4    []string `json:"ipv4_records,omitempty"`
+	IPv6    []string `json:"ipv6_records,omitempty"`
+}

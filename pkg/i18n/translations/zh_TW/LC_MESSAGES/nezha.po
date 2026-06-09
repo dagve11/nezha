@@ -313,3 +313,80 @@ msgstr "故障"
 #: service/singleton/user.go:60
 msgid "user id not specified"
 msgstr "使用者 ID 未指定"
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Automation completed"
+msgstr "[優選 IP] 自動化執行完成"
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Rollback completed"
+msgstr "[優選 IP] 回滾完成"
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Automation failed"
+msgstr "[優選 IP] 自動化執行失敗"
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Rollback failed"
+msgstr "[優選 IP] 回滾失敗"
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Selected records"
+msgstr "[優選 IP] 已選記錄"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "IPv4: %s"
+msgstr "IPv4: %s"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "IPv6: %s"
+msgstr "IPv6: %s"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Domains: %s"
+msgstr "網域: %s"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "DNS writeback: %s"
+msgstr "DNS 回寫: %s"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Candidates: %d"
+msgstr "候選數量: %d"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Selected records: %d"
+msgstr "推送記錄數: %d"
+
+#: service/singleton/bestip_automation.go
+msgid "Candidate details: IP · latency · success · download · score"
+msgstr "候選明細: IP · 延遲 · 成功率 · 下載 · 評分"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Error: %s"
+msgstr "錯誤: %s"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Time: %s"
+msgstr "時間: %s"
+
+#: service/singleton/bestip_automation.go
+msgid "success"
+msgstr "成功"
+
+#: service/singleton/bestip_automation.go
+msgid "failed"
+msgstr "失敗"
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "failed: %s"
+msgstr "失敗: %s"

@@ -2,16 +2,12 @@ package controller
 
 import (
 	"context"
-	"slices"
-	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/nezhahq/nezha/model"
 	"github.com/nezhahq/nezha/pkg/bestip"
-	"github.com/nezhahq/nezha/pkg/ddns"
-	"github.com/nezhahq/nezha/pkg/ddns/webhook"
-	"github.com/nezhahq/nezha/pkg/utils"
 	"github.com/nezhahq/nezha/service/singleton"
 )
 
@@ -19,6 +15,23 @@ var bestIPFissionRunner = func(ctx context.Context, config bestip.FissionConfig)
 	return bestip.NewFissionService(config).Run(ctx)
 }
 
+var bestIPFissionStreamRunner = func(ctx context.Context, config bestip.FissionConfig, progress func(bestip.FissionProgressEvent)) (*bestip.FissionRunResult, error) {
+	service := bestip.NewFissionService(config)
+	service.Progress = progress
+	return service.Run(ctx)
+}
+
+// Run Best IP fission
+// @Summary Run Best IP fission
+// @Security BearerAuth
+// @Schemes
+// @Description Run Best IP fission from the provided seed IPs and scan config
+// @Tags auth required
+// @Accept json
+// @Param request body model.BestIPFissionForm true "Best IP fission request"
+// @Produce json
+// @Success 200 {object} model.CommonResponse[model.BestIPFissionResult]
+// @Router /bestip/fission [post]
 func runBestIPFission(c *gin.Context) (*model.BestIPFissionResult, error) {
 	var form model.BestIPFissionForm
 	if err := c.ShouldBindJSON(&form); err != nil {
@@ -31,106 +44,165 @@ func runBestIPFission(c *gin.Context) (*model.BestIPFissionResult, error) {
 	return result, nil
 }
 
+func streamBestIPFission(c *gin.Context) (any, error) {
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		return nil, newWsError("%v", err)
+	}
+	defer conn.Close()
+
+	var form model.BestIPFissionForm
+	if err := conn.ReadJSON(&form); err != nil {
+		return nil, newWsError("%v", err)
+	}
+
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
+	var writeMu sync.Mutex
+	var writeErr error
+	writeEvent := func(event bestip.FissionProgressEvent) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if writeErr != nil {
+			return writeErr
+		}
+		if err := conn.WriteJSON(event); err != nil {
+			writeErr = err
+			cancel()
+			return err
+		}
+		return nil
+	}
+
+	_, err = bestIPFissionStreamRunner(ctx, form, func(event bestip.FissionProgressEvent) {
+		_ = writeEvent(event)
+	})
+	if err != nil {
+		_ = writeEvent(bestip.FissionProgressEvent{Type: bestip.FissionProgressError, Error: err.Error()})
+		return nil, newWsError("%v", err)
+	}
+	if writeErr != nil {
+		return nil, newWsError("%v", writeErr)
+	}
+	return nil, newWsError("")
+}
+
+// Write Best IP DNS records
+// @Summary Write Best IP DNS records
+// @Security BearerAuth
+// @Schemes
+// @Description Write selected Best IP records to DDNS profiles
+// @Tags auth required
+// @Accept json
+// @Param request body model.BestIPDNSWriteForm true "Best IP DNS write request"
+// @Produce json
+// @Success 200 {object} model.CommonResponse[[]model.BestIPDNSWriteResult]
+// @Router /bestip/dns [post]
 func writeBestIPDNS(c *gin.Context) ([]model.BestIPDNSWriteResult, error) {
 	var form model.BestIPDNSWriteForm
 	if err := c.ShouldBindJSON(&form); err != nil {
 		return nil, err
 	}
-	if len(form.DDNSProfiles) == 0 {
-		return nil, singleton.Localizer.ErrorT("DDNS profile id is required")
-	}
-	ipRecords := normalizeBestIPDNSRecords(form)
-	if len(ipRecords.IPv4Addrs) == 0 && len(ipRecords.IPv6Addrs) == 0 {
-		return nil, singleton.Localizer.ErrorT("at least one IP address is required")
-	}
-	if !singleton.DDNSShared.CheckPermission(c, slices.Values(form.DDNSProfiles)) {
-		return nil, singleton.Localizer.ErrorT("permission denied")
-	}
+	return singleton.WriteBestIPDNS(c.Request.Context(), getUid(c), form)
+}
 
-	confServers := strings.Split(singleton.Conf.DNSServers, ",")
-	ctx := context.WithValue(c.Request.Context(), ddns.DNSServerKey{}, utils.IfOr(confServers[0] != "", confServers, utils.DNSServers))
-	ip := &model.IP{IPv4Addr: firstRecord(ipRecords.IPv4Addrs), IPv6Addr: firstRecord(ipRecords.IPv6Addrs)}
-	providers, err := singleton.DDNSShared.GetDDNSProvidersFromProfiles(form.DDNSProfiles, ip)
-	if err != nil {
+// Get Best IP automation
+// @Summary Get Best IP automation
+// @Security BearerAuth
+// @Schemes
+// @Description Get current user's Best IP automation config
+// @Tags auth required
+// @Produce json
+// @Success 200 {object} model.CommonResponse[model.BestIPAutomation]
+// @Router /bestip/automation [get]
+func getBestIPAutomation(c *gin.Context) (*model.BestIPAutomation, error) {
+	automation, ok := singleton.BestIPAutomationShared.GetByUser(getUid(c))
+	if !ok {
+		return &model.BestIPAutomation{Common: model.Common{UserID: getUid(c)}, WriteTopN: 1}, nil
+	}
+	return automation, nil
+}
+
+// Save Best IP automation
+// @Summary Save Best IP automation
+// @Security BearerAuth
+// @Schemes
+// @Description Save current user's Best IP automation config
+// @Tags auth required
+// @Accept json
+// @Param request body model.BestIPAutomationForm true "Best IP automation request"
+// @Produce json
+// @Success 200 {object} model.CommonResponse[model.BestIPAutomation]
+// @Router /bestip/automation [post]
+func saveBestIPAutomation(c *gin.Context) (*model.BestIPAutomation, error) {
+	var form model.BestIPAutomationForm
+	if err := c.ShouldBindJSON(&form); err != nil {
 		return nil, err
 	}
-
-	results := make([]model.BestIPDNSWriteResult, 0, len(providers))
-	for _, provider := range providers {
-		provider.IPRecords = ipRecords
-		applyBestIPDNSRecordFamilies(provider, ipRecords)
-		domainResults := provider.UpdateDomain(ctx, form.Domains...)
-		item := model.BestIPDNSWriteResult{
-			ProfileID: provider.GetProfileID(),
-			Provider:  provider.DDNSProfile.Provider,
-			Domains:   domainsFromDDNSResults(domainResults),
-			Success:   true,
-		}
-		for _, domainResult := range domainResults {
-			if !domainResult.Success {
-				item.Success = false
-				item.Error = domainResult.Error
-				break
-			}
-		}
-		results = append(results, item)
+	if err := assertOwnsNotificationGroup(c, form.NotificationGroupID); err != nil {
+		return nil, err
 	}
-	return results, nil
+	return singleton.BestIPAutomationShared.SaveForUser(getUid(c), form)
 }
 
-func applyBestIPDNSRecordFamilies(provider *ddns.Provider, ipRecords *ddns.IPRecords) {
-	profile := *provider.DDNSProfile
-	enableIPv4 := profile.EnableIPv4 != nil && *profile.EnableIPv4 && len(ipRecords.IPv4Addrs) > 0
-	enableIPv6 := profile.EnableIPv6 != nil && *profile.EnableIPv6 && len(ipRecords.IPv6Addrs) > 0
-	profile.EnableIPv4 = &enableIPv4
-	profile.EnableIPv6 = &enableIPv6
-	provider.DDNSProfile = &profile
-
-	if setter, ok := provider.Setter.(*webhook.Provider); ok {
-		setter.DDNSProfile = &profile
-	}
+// Run Best IP automation
+// @Summary Run Best IP automation
+// @Security BearerAuth
+// @Schemes
+// @Description Manually run current user's Best IP automation
+// @Tags auth required
+// @Produce json
+// @Success 200 {object} model.CommonResponse[model.BestIPAutomationHistory]
+// @Router /bestip/automation/run [post]
+func runBestIPAutomation(c *gin.Context) (*model.BestIPAutomationHistory, error) {
+	return singleton.BestIPAutomationShared.RunForUser(c.Request.Context(), getUid(c))
 }
 
-func normalizeBestIPDNSRecords(form model.BestIPDNSWriteForm) *ddns.IPRecords {
-	return &ddns.IPRecords{
-		IPv4Addrs: normalizeBestIPRecordList(form.IPv4Records, form.IPv4),
-		IPv6Addrs: normalizeBestIPRecordList(form.IPv6Records, form.IPv6),
-	}
+// Rollback Best IP automation
+// @Summary Rollback Best IP automation
+// @Security BearerAuth
+// @Schemes
+// @Description Roll back current user's Best IP DNS records to the stored rollback point
+// @Tags auth required
+// @Produce json
+// @Success 200 {object} model.CommonResponse[model.BestIPAutomationHistory]
+// @Router /bestip/automation/rollback [post]
+func rollbackBestIPAutomation(c *gin.Context) (*model.BestIPAutomationHistory, error) {
+	return singleton.BestIPAutomationShared.RollbackForUser(c.Request.Context(), getUid(c))
 }
 
-func normalizeBestIPRecordList(records []string, fallback string) []string {
-	source := records
-	if len(source) == 0 && strings.TrimSpace(fallback) != "" {
-		source = []string{fallback}
-	}
-
-	out := make([]string, 0, len(source))
-	seen := make(map[string]struct{}, len(source))
-	for _, record := range source {
-		record = strings.TrimSpace(record)
-		if record == "" {
-			continue
-		}
-		if _, ok := seen[record]; ok {
-			continue
-		}
-		seen[record] = struct{}{}
-		out = append(out, record)
-	}
-	return out
+// List Best IP automation histories
+// @Summary List Best IP automation histories
+// @Security BearerAuth
+// @Schemes
+// @Description List current user's recent Best IP automation histories
+// @Tags auth required
+// @Produce json
+// @Success 200 {object} model.CommonResponse[[]model.BestIPAutomationHistory]
+// @Router /bestip/automation/history [get]
+func listBestIPAutomationHistory(c *gin.Context) ([]*model.BestIPAutomationHistory, error) {
+	return singleton.BestIPAutomationShared.HistoriesForUser(getUid(c), 20)
 }
 
-func firstRecord(records []string) string {
-	if len(records) == 0 {
-		return ""
+// Notify Best IP result
+// @Summary Notify Best IP result
+// @Security BearerAuth
+// @Schemes
+// @Description Send selected Best IP records to a notification group
+// @Tags auth required
+// @Accept json
+// @Param request body model.BestIPNotifyForm true "Best IP notify request"
+// @Produce json
+// @Success 200 {object} model.CommonResponse[model.BestIPNotifyResult]
+// @Router /bestip/notify [post]
+func notifyBestIPResult(c *gin.Context) (*model.BestIPNotifyResult, error) {
+	var form model.BestIPNotifyForm
+	if err := c.ShouldBindJSON(&form); err != nil {
+		return nil, err
 	}
-	return records[0]
-}
-
-func domainsFromDDNSResults(results []ddns.UpdateDomainResult) []string {
-	out := make([]string, 0, len(results))
-	for _, result := range results {
-		out = append(out, result.Domain)
+	if err := assertOwnsNotificationGroup(c, form.NotificationGroupID); err != nil {
+		return nil, err
 	}
-	return out
+	return singleton.SendBestIPNotification(getUid(c), form)
 }

@@ -310,3 +310,80 @@ msgstr ""
 #: service/singleton/user.go:60
 msgid "user id not specified"
 msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Automation completed"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Rollback completed"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Automation failed"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Rollback failed"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "[Best IP] Selected records"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "IPv4: %s"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "IPv6: %s"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Domains: %s"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "DNS writeback: %s"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Candidates: %d"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Selected records: %d"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "Candidate details: IP · latency · success · download · score"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Error: %s"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "Time: %s"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "success"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+msgid "failed"
+msgstr ""
+
+#: service/singleton/bestip_automation.go
+#, c-format
+msgid "failed: %s"
+msgstr ""

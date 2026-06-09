@@ -28,12 +28,13 @@ var (
 	FrontendTemplates []model.FrontendTemplate
 	DashboardBootTime = uint64(time.Now().Unix())
 
-	ServerShared          *ServerClass
-	ServiceSentinelShared *ServiceSentinel
-	DDNSShared            *DDNSClass
-	NotificationShared    *NotificationClass
-	NATShared             *NATClass
-	CronShared            *CronClass
+	ServerShared           *ServerClass
+	ServiceSentinelShared  *ServiceSentinel
+	DDNSShared             *DDNSClass
+	NotificationShared     *NotificationClass
+	NATShared              *NATClass
+	CronShared             *CronClass
+	BestIPAutomationShared *BestIPAutomationClass
 	// ServerTransferShared is initialized in LoadSingleton AFTER ServerShared
 	// (so the in-memory pending index can write back into ServerShared.UserID
 	// on transitions) and AFTER initUser (so PushIfOnline can read secrets
@@ -63,7 +64,12 @@ func LoadSingleton(bus chan<- *model.Service) (err error) {
 	NotificationShared = NewNotificationClass()
 	ServerShared = NewServerClass()
 	CronShared = NewCronClass()
+	BestIPAutomationShared = NewBestIPAutomationClass()
 	ServerTransferShared = NewServerTransferClass()
+	VPNShared = NewVPNClass()
+	if err = StartVPNLifecycleJobs(); err != nil {
+		return
+	}
 	// 最后初始化 ServiceSentinel
 	ServiceSentinelShared, err = NewServiceSentinel(bus)
 	return
@@ -93,8 +99,9 @@ func InitDBFromPath(path string) error {
 	err = DB.AutoMigrate(model.Server{}, model.User{}, model.ServerGroup{}, model.NotificationGroup{},
 		model.Notification{}, model.AlertRule{}, model.Service{}, model.NotificationGroupNotification{},
 		model.Cron{}, model.Transfer{}, model.ServerGroupServer{},
-		model.NAT{}, model.DDNSProfile{}, model.NotificationGroupNotification{},
-		model.WAF{}, model.Oauth2Bind{}, model.ServerTransfer{}, model.JWTSession{}, model.DeletedServer{})
+		model.NAT{}, model.DDNSProfile{}, model.BestIPAutomation{}, model.BestIPAutomationHistory{}, model.NotificationGroupNotification{},
+		model.WAF{}, model.Oauth2Bind{}, model.ServerTransfer{}, model.JWTSession{}, model.DeletedServer{},
+		model.AgentVPNPolicy{}, model.AgentVPNSession{}, model.AgentVPNAuditLog{})
 	if err != nil {
 		return err
 	}

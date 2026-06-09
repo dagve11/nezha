@@ -277,6 +277,10 @@ func (_NotificationMuteLabel) AppendNotificationGroupName(label string, notifica
 	return fmt.Sprintf("%s:%s", label, notificationGroupName)
 }
 
+func (_NotificationMuteLabel) BestIPAutomationFailure(automationID uint64) string {
+	return fmt.Sprintf("bf::biaf-%d", automationID)
+}
+
 func (_NotificationMuteLabel) ServiceLatencyMin(serviceId uint64) string {
 	return fmt.Sprintf("bf::sln-%d", serviceId)
 }
