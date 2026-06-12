@@ -24,12 +24,44 @@ import (
 func ServeRPC() *grpc.Server {
 	server := grpc.NewServer(grpc.ChainUnaryInterceptor(getRealIp, waf))
 	rpcService.NezhaHandlerSingleton = rpcService.NewNezhaHandler()
+	handler := rpcService.NezhaHandlerSingleton
 	// Install the IOStream revocation hook so ServerTransferShared can tear
 	// down terminal/FM/NAT sessions held by the previous owner on every
 	// ownership rotation (Register/revertTransition/OnServersDeleted).
-	singleton.ServerTransferStreamRevocationHook = rpcService.NezhaHandlerSingleton.RevokeStreamsForServer
-	proto.RegisterNezhaServiceServer(server, rpcService.NezhaHandlerSingleton)
+	singleton.ServerTransferStreamRevocationHook = handler.RevokeStreamsForServer
+	singleton.VPNRelayCreator = handler.CreateVPNRelay
+	singleton.VPNRelayCloser = func(sessionID string) {
+		_ = handler.CloseVPNRelay(sessionID)
+	}
+	handler.SetVPNRelayReporter(reportVPNRelayToSingleton)
+	proto.RegisterNezhaServiceServer(server, handler)
 	return server
+}
+
+func reportVPNRelayToSingleton(report rpcService.VPNRelayReport) bool {
+	if singleton.VPNShared == nil {
+		return false
+	}
+	if report.Event != "" {
+		detail := ""
+		if report.Error != nil {
+			detail = report.Error.Error()
+		}
+		singleton.VPNShared.HandleRelayEvent(report.SessionID, report.Event, detail)
+	}
+	shouldClose, reason := singleton.VPNShared.HandleRelayTraffic(
+		report.SessionID,
+		report.UploadBytes,
+		report.DownloadBytes,
+		report.ActiveConnections,
+	)
+	if shouldClose && reason != "" {
+		singleton.VPNShared.HandleRelayEvent(report.SessionID, "relay_policy_close", reason)
+	}
+	if report.Closed {
+		singleton.VPNShared.HandleRelayClosed(report.SessionID, report.UploadBytes, report.DownloadBytes, report.Error)
+	}
+	return shouldClose
 }
 
 func waf(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
