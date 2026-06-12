@@ -561,13 +561,13 @@ func TestStatusVPNSessionDispatchesAgentStatusRequests(t *testing.T) {
 	entryStream := attachControllerVPNTaskStream(t, 1)
 	exitStream := attachControllerVPNTaskStream(t, 2)
 	require.NoError(t, singleton.DB.Create(&model.AgentVPNPolicy{
-		Common:        model.Common{ID: 77, UserID: 200},
-		Name:          "status policy",
-		EntryServerID: 1,
-		ExitServerID:  2,
-		Mode:          model.VPNModeSystemProxy,
-		RuleMode:      model.VPNRuleModeGlobal,
-		ListenSOCKS:   "127.0.0.1:1080",
+		Common:         model.Common{ID: 77, UserID: 200},
+		Name:           "status policy",
+		EntryServerID:  1,
+		ExitServerID:   2,
+		Mode:           model.VPNModeSystemProxy,
+		RuleMode:       model.VPNRuleModeGlobal,
+		ListenSOCKS:    "127.0.0.1:1080",
 		ExpiresSeconds: 3600,
 	}).Error)
 	require.NoError(t, singleton.DB.Create(&model.AgentVPNSession{
@@ -602,13 +602,13 @@ func TestStatusVPNSessionRejectsSessionWithoutPermission(t *testing.T) {
 	entryStream := attachControllerVPNTaskStream(t, 1)
 	exitStream := attachControllerVPNTaskStream(t, 2)
 	require.NoError(t, singleton.DB.Create(&model.AgentVPNPolicy{
-		Common:        model.Common{ID: 88, UserID: 300},
-		Name:          "foreign policy",
-		EntryServerID: 1,
-		ExitServerID:  2,
-		Mode:          model.VPNModeSystemProxy,
-		RuleMode:      model.VPNRuleModeGlobal,
-		ListenSOCKS:   "127.0.0.1:1080",
+		Common:         model.Common{ID: 88, UserID: 300},
+		Name:           "foreign policy",
+		EntryServerID:  1,
+		ExitServerID:   2,
+		Mode:           model.VPNModeSystemProxy,
+		RuleMode:       model.VPNRuleModeGlobal,
+		ListenSOCKS:    "127.0.0.1:1080",
 		ExpiresSeconds: 3600,
 	}).Error)
 	require.NoError(t, singleton.DB.Create(&model.AgentVPNSession{
@@ -883,7 +883,9 @@ func TestVPNSessionStreamIncludesBufferedAgentSidecarLogs(t *testing.T) {
 	}
 	require.NoError(t, conn.ReadJSON(&frame))
 	require.Equal(t, session.SessionID, frame.Session.SessionID)
-	require.Equal(t, []string{"entry accepted connection", "entry proxy connected"}, frame.Logs)
+	require.Contains(t, frame.Logs, "entry accepted connection")
+	require.Contains(t, frame.Logs, "entry proxy connected")
+	require.Contains(t, strings.Join(frame.Logs, "\n"), "[dashboard] agent report")
 }
 
 func attachControllerVPNTaskStream(t *testing.T, serverID uint64) *controllerVPNTaskStream {
