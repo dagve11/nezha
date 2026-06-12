@@ -442,7 +442,7 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 	if session.State != model.VPNStateStarting {
 		t.Fatalf("expected session starting, got %q", session.State)
 	}
-	if session.ExitState != model.VPNStateStarting || session.EntryState != model.VPNStatePending {
+	if session.ExitState != model.VPNStateStarting || session.EntryState != model.VPNStateStarting {
 		t.Fatalf("unexpected role states: entry=%q exit=%q", session.EntryState, session.ExitState)
 	}
 
@@ -450,22 +450,70 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 	if exitTask.GetId() != session.ID {
 		t.Fatalf("expected task id %d, got %d", session.ID, exitTask.GetId())
 	}
-	if exitReq.Action != model.VPNActionStart || exitReq.Role != model.VPNRoleExit {
-		t.Fatalf("expected start exit request, got action=%q role=%q", exitReq.Action, exitReq.Role)
+	if exitReq.Action != model.VPNActionPrepare || exitReq.Role != model.VPNRoleExit {
+		t.Fatalf("expected prepare exit request, got action=%q role=%q", exitReq.Action, exitReq.Role)
 	}
-	if exitReq.PeerServerID != policy.EntryServerID {
-		t.Fatalf("exit request peer must be entry server %d, got %d", policy.EntryServerID, exitReq.PeerServerID)
+	if exitReq.PeerServerID != 0 || exitReq.RelayStreamID != "" || exitReq.Token != "" {
+		t.Fatalf("prepare request must not include runtime relay fields, got peer=%d stream=%q token=%q", exitReq.PeerServerID, exitReq.RelayStreamID, exitReq.Token)
 	}
-	if exitReq.RelayStreamID != session.ExitStreamID {
-		t.Fatalf("exit relay stream mismatch: want %q got %q", session.ExitStreamID, exitReq.RelayStreamID)
-	}
-	if exitReq.Token == "" {
-		t.Fatal("control request must include the session token for the agent")
-	}
-	if strings.Contains(session.TokenHash, exitReq.Token) || !strings.HasPrefix(session.TokenHash, "sha256:") {
+	if !strings.HasPrefix(session.TokenHash, "sha256:") {
 		t.Fatalf("session token must be stored only as a sha256 hash, got %q", session.TokenHash)
 	}
-	assertNoTask(t, h.entryStream)
+	entryTask, entryPrepareReq := readVPNTask(t, h.entryStream)
+	if entryTask.GetId() != session.ID {
+		t.Fatalf("expected entry prepare task id %d, got %d", session.ID, entryTask.GetId())
+	}
+	if entryPrepareReq.Action != model.VPNActionPrepare || entryPrepareReq.Role != model.VPNRoleEntry {
+		t.Fatalf("expected prepare entry request, got action=%q role=%q", entryPrepareReq.Action, entryPrepareReq.Role)
+	}
+	if entryPrepareReq.PeerServerID != 0 || entryPrepareReq.RelayStreamID != "" || entryPrepareReq.Token != "" {
+		t.Fatalf("entry prepare request must not include runtime relay fields, got peer=%d stream=%q token=%q", entryPrepareReq.PeerServerID, entryPrepareReq.RelayStreamID, entryPrepareReq.Token)
+	}
+	if len(*h.relayCreates) != 0 {
+		t.Fatalf("relay must not be created before core prepare completes, got %#v", *h.relayCreates)
+	}
+
+	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStatePrepared,
+		Logs:      []string{"[core] prepare=downloaded path=/tmp/sing-box temporary=true"},
+	})
+	if err != nil {
+		t.Fatalf("handle exit prepared: %v", err)
+	}
+	if session.ExitState != model.VPNStatePrepared || session.EntryState != model.VPNStateStarting {
+		t.Fatalf("expected exit prepared and entry still preparing, got entry=%q exit=%q", session.EntryState, session.ExitState)
+	}
+	assertNoTask(t, h.exitStream)
+
+	session, err = h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleEntry,
+		State:     model.VPNStatePrepared,
+		Logs:      []string{"[core] prepare=reused path=/tmp/sing-box temporary=true"},
+	})
+	if err != nil {
+		t.Fatalf("handle entry prepared: %v", err)
+	}
+	if session.ExitState != model.VPNStateStarting || session.EntryState != model.VPNStatePending {
+		t.Fatalf("expected exit starting and entry pending after both prepared, got entry=%q exit=%q", session.EntryState, session.ExitState)
+	}
+	if len(*h.relayCreates) != 1 {
+		t.Fatalf("relay must be created once after both agents prepare, got %#v", *h.relayCreates)
+	}
+	_, exitStartReq := readVPNTask(t, h.exitStream)
+	if exitStartReq.Action != model.VPNActionStart || exitStartReq.Role != model.VPNRoleExit {
+		t.Fatalf("expected start exit request, got action=%q role=%q", exitStartReq.Action, exitStartReq.Role)
+	}
+	if exitStartReq.Token == "" {
+		t.Fatal("exit start must include the per-session token")
+	}
+	if strings.Contains(session.TokenHash, exitStartReq.Token) {
+		t.Fatalf("session token must be stored only as a sha256 hash, got %q", session.TokenHash)
+	}
 
 	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
@@ -492,7 +540,7 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 	if entryReq.RelayStreamID != session.EntryStreamID {
 		t.Fatalf("entry relay stream mismatch: want %q got %q", session.EntryStreamID, entryReq.RelayStreamID)
 	}
-	if entryReq.Token != exitReq.Token {
+	if entryReq.Token != exitStartReq.Token {
 		t.Fatal("entry and exit agents must receive the same per-session token")
 	}
 
@@ -520,7 +568,9 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 		t.Fatalf("local SOCKS was not updated from agent result: %q", session.LocalSOCKS)
 	}
 	logs := strings.Join(h.vpn.SessionLogs(session.SessionID), "\n")
-	if !strings.Contains(logs, "sent start request to exit agent") ||
+	if !strings.Contains(logs, "sent prepare request to exit agent") ||
+		!strings.Contains(logs, "[core] prepare=downloaded") ||
+		!strings.Contains(logs, "sent start request to exit agent") ||
 		!strings.Contains(logs, "agent report server=") ||
 		!strings.Contains(logs, "session started; entry and exit agents are running") {
 		t.Fatalf("control plane logs missing dispatch/result/running markers: %s", logs)
@@ -1152,7 +1202,7 @@ func TestVPNStartSessionPassesSystemProxyFlagToEntryAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 
 	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
@@ -1190,7 +1240,7 @@ func TestVPNStartSessionPassesIdleTimeoutLimitToEntryAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 
 	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
@@ -1233,22 +1283,18 @@ func TestVPNStartSessionPassesPolicyCoreSpecToAgents(t *testing.T) {
 		t.Fatalf("policy core sha256 must be normalized, got %q", policy.CoreSHA256)
 	}
 
-	session, err := h.vpn.StartSession(actor, policy.ID)
-	if err != nil {
+	if _, err := h.vpn.StartSession(actor, policy.ID); err != nil {
 		t.Fatalf("start session: %v", err)
 	}
 	_, exitReq := readVPNTask(t, h.exitStream)
-	assertVPNCoreSpec(t, exitReq.Core)
-
-	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
-		SessionID: session.SessionID,
-		Action:    model.VPNActionStart,
-		Role:      model.VPNRoleExit,
-		State:     model.VPNStateRunning,
-	}); err != nil {
-		t.Fatalf("handle exit running: %v", err)
+	if exitReq.Action != model.VPNActionPrepare || exitReq.Role != model.VPNRoleExit {
+		t.Fatalf("expected exit prepare request, got %+v", exitReq)
 	}
+	assertVPNCoreSpec(t, exitReq.Core)
 	_, entryReq := readVPNTask(t, h.entryStream)
+	if entryReq.Action != model.VPNActionPrepare || entryReq.Role != model.VPNRoleEntry {
+		t.Fatalf("expected entry prepare request, got %+v", entryReq)
+	}
 	assertVPNCoreSpec(t, entryReq.Core)
 }
 
@@ -1261,6 +1307,9 @@ func TestVPNStartSessionPassesDefaultCoreMirrorsToAgents(t *testing.T) {
 		t.Fatalf("start session: %v", err)
 	}
 	_, exitReq := readVPNTask(t, h.exitStream)
+	if exitReq.Action != model.VPNActionPrepare || exitReq.Role != model.VPNRoleExit {
+		t.Fatalf("expected exit prepare request, got %+v", exitReq)
+	}
 	if exitReq.Core.DownloadURL != "" {
 		t.Fatalf("default core spec must not force a single download URL, got %q", exitReq.Core.DownloadURL)
 	}
@@ -1432,6 +1481,11 @@ func TestVPNStartSessionPassesTunHealthProbeToEntryTunAgent(t *testing.T) {
 	if _, ok := exitReq.Extra["tun_health_url"]; ok {
 		t.Fatalf("exit agent must not receive entry TUN health probe config, extra=%#v", exitReq.Extra)
 	}
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if _, ok := exitStartReq.Extra["tun_health_url"]; ok {
+		t.Fatalf("exit start must not receive entry TUN health probe config, extra=%#v", exitStartReq.Extra)
+	}
 
 	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
@@ -1521,6 +1575,11 @@ func TestVPNStartSessionPassesEgressProbeOnlyToEntryAgent(t *testing.T) {
 	if _, ok := exitReq.Extra["egress_probe_url"]; ok {
 		t.Fatalf("exit agent must not receive entry egress probe config, extra=%#v", exitReq.Extra)
 	}
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if _, ok := exitStartReq.Extra["egress_probe_url"]; ok {
+		t.Fatalf("exit start must not receive entry egress probe config, extra=%#v", exitStartReq.Extra)
+	}
 
 	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
@@ -1565,6 +1624,11 @@ func TestVPNStartSessionPassesTunDNSServerToEntryTunAgent(t *testing.T) {
 	if exitReq.DNSServer != "" {
 		t.Fatalf("exit agent must not receive entry TUN DNS server, got %q", exitReq.DNSServer)
 	}
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if exitStartReq.DNSServer != "" {
+		t.Fatalf("exit start must not receive entry TUN DNS server, got %q", exitStartReq.DNSServer)
+	}
 
 	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
@@ -1600,9 +1664,11 @@ func TestVPNStartSessionPassesDynamicDashboardBypassToEntryTunAgent(t *testing.T
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	_, exitReq := readVPNTask(t, h.exitStream)
-	assertVPNBypassContains(t, exitReq.DashboardBypass, "dashboard.example.com", "198.51.100.20", "2001:db8::20")
-	assertVPNBypassNotContains(t, exitReq.DashboardBypass, "127.0.0.0/8", "::1/128", "169.254.0.0/16", "169.254.169.254/32", "fe80::/10")
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	assertVPNBypassContains(t, exitStartReq.DashboardBypass, "dashboard.example.com", "198.51.100.20", "2001:db8::20")
+	assertVPNBypassNotContains(t, exitStartReq.DashboardBypass, "127.0.0.0/8", "::1/128", "169.254.0.0/16", "169.254.169.254/32", "fe80::/10")
 
 	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
@@ -1626,12 +1692,13 @@ func TestVPNControlResultRejectsReporterNotBoundToSession(t *testing.T) {
 		t.Fatalf("start session: %v", err)
 	}
 	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
 
 	_, err = h.vpn.HandleControlResult(3, model.VPNControlResult{
 		SessionID: session.SessionID,
-		Action:    model.VPNActionStart,
+		Action:    model.VPNActionPrepare,
 		Role:      model.VPNRoleExit,
-		State:     model.VPNStateRunning,
+		State:     model.VPNStatePrepared,
 	})
 	if err == nil {
 		t.Fatal("foreign reporter must not be allowed to advance the VPN session")
@@ -1642,7 +1709,7 @@ func TestVPNControlResultRejectsReporterNotBoundToSession(t *testing.T) {
 	if err := DB.First(&stored, session.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.ExitState != model.VPNStateStarting || stored.EntryState != model.VPNStatePending {
+	if stored.ExitState != model.VPNStateStarting || stored.EntryState != model.VPNStateStarting {
 		t.Fatalf("foreign report changed session state: entry=%q exit=%q", stored.EntryState, stored.ExitState)
 	}
 }
@@ -1903,7 +1970,7 @@ func TestVPNStartupFailedControlResultReportsCleanupDispatchFailure(t *testing.T
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
 		Action:    model.VPNActionStart,
@@ -2288,23 +2355,39 @@ func TestVPNStartSessionDeletesTokenWhenExitStartDispatchFails(t *testing.T) {
 	if !ok {
 		t.Fatal("exit server missing from harness")
 	}
-	exit.SetTaskStream(failingExit)
 
 	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	if _, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStatePrepared,
+	}); err != nil {
+		t.Fatalf("handle exit prepared: %v", err)
+	}
+	exit.SetTaskStream(failingExit)
+	failed, err := h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleEntry,
+		State:     model.VPNStatePrepared,
+	})
 	if err == nil {
-		t.Fatal("start session must return the exit dispatch error")
+		t.Fatal("exit start dispatch failure must be returned")
 	}
-	if session == nil {
-		t.Fatal("start session should return the persisted failed session")
-	}
-	if session.State != model.VPNStateFailed || session.ExitState != model.VPNStateFailed {
-		t.Fatalf("failed exit dispatch must mark session failed, got state=%q exit=%q", session.State, session.ExitState)
+	if failed.State != model.VPNStateFailed || failed.ExitState != model.VPNStateFailed {
+		t.Fatalf("failed exit dispatch must mark session failed, got state=%q exit=%q", failed.State, failed.ExitState)
 	}
 	_, exitReq := readVPNTask(t, &failingExit.capturedTaskStream)
 	if exitReq.Action != model.VPNActionStart || exitReq.Role != model.VPNRoleExit {
 		t.Fatalf("start should still attempt exit start dispatch, got %+v", exitReq)
 	}
-	if _, err := h.vpn.tokenForSession(session); err == nil {
+	if _, err := h.vpn.tokenForSession(failed); err == nil {
 		t.Fatal("failed exit start dispatch must delete the session token")
 	}
 	if len(*h.relayCloses) != 1 || (*h.relayCloses)[0] != session.SessionID {
@@ -2317,7 +2400,7 @@ func TestVPNStartSessionDeletesTokenWhenExitStartDispatchFails(t *testing.T) {
 	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionStartSession, session.SessionID, false).Last(&audit).Error; err != nil {
 		t.Fatalf("failed exit start dispatch must write failure audit: %v", err)
 	}
-	if audit.Detail["stage"] != "exit_start_dispatch" || audit.Detail["cleanup_dispatched"] != "false" {
+	if audit.Detail["stage"] != "exit_start_dispatch" || audit.Detail["cleanup_dispatched"] != "true" {
 		t.Fatalf("failed exit start dispatch audit detail mismatch: %#v", audit.Detail)
 	}
 }
@@ -2330,7 +2413,7 @@ func TestVPNEntryStartDispatchFailureCleansRuntimeAndStopsExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	failingEntry := newFailingTaskStream(errors.New("entry stream closed"))
 	entry, ok := ServerShared.Get(policy.EntryServerID)
 	if !ok {
@@ -2388,7 +2471,7 @@ func TestVPNEntryStartDispatchFailureReportsCleanupDispatchFailure(t *testing.T)
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	failingEntry := newFailingTaskStream(errors.New("entry stream closed"))
 	entry, ok := ServerShared.Get(policy.EntryServerID)
 	if !ok {
@@ -2442,7 +2525,7 @@ func TestVPNExitRunningStillDispatchesEntryStartWhenPolicyDeleted(t *testing.T) 
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	if err := DB.Delete(&model.AgentVPNPolicy{}, policy.ID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -2476,7 +2559,7 @@ func TestVPNEntryRunningStillCompletesSessionWhenPolicyDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	got, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
 		Action:    model.VPNActionStart,
@@ -2520,7 +2603,7 @@ func TestVPNExitRunningThenEntryOfflineReportsCleanupDispatchFailure(t *testing.
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	h.mustServer(policy.EntryServerID).SetTaskStream(nil)
 	failingExit := newFailingTaskStream(errors.New("exit cleanup stream closed"))
 	exit, ok := ServerShared.Get(policy.ExitServerID)
@@ -2569,7 +2652,7 @@ func TestVPNExitRunningThenMissingTokenReportsCleanupDispatchFailure(t *testing.
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	h.vpn.mu.Lock()
 	delete(h.vpn.sessionTokens, session.SessionID)
 	h.vpn.mu.Unlock()
@@ -5707,7 +5790,7 @@ func startAndRunTestVPNSession(t *testing.T, h *vpnHarness, actor VPNActor, poli
 	if err != nil {
 		t.Fatalf("start session: %v", err)
 	}
-	readVPNTask(t, h.exitStream)
+	prepareAndDispatchExitStartForTest(t, h, session, policy)
 	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
 		Action:    model.VPNActionStart,
@@ -5728,6 +5811,58 @@ func startAndRunTestVPNSession(t *testing.T, h *vpnHarness, actor VPNActor, poli
 		t.Fatalf("handle entry running: %v", err)
 	}
 	return session
+}
+
+func prepareAndDispatchExitStartForTest(t *testing.T, h *vpnHarness, session *model.AgentVPNSession, policy *model.AgentVPNPolicy) model.VPNControlRequest {
+	t.Helper()
+	_, exitPrepareReq := readVPNTask(t, h.exitStream)
+	if exitPrepareReq.Action != model.VPNActionPrepare || exitPrepareReq.Role != model.VPNRoleExit {
+		t.Fatalf("expected prepare exit request, got action=%q role=%q", exitPrepareReq.Action, exitPrepareReq.Role)
+	}
+	_, entryPrepareReq := readVPNTask(t, h.entryStream)
+	if entryPrepareReq.Action != model.VPNActionPrepare || entryPrepareReq.Role != model.VPNRoleEntry {
+		t.Fatalf("expected prepare entry request, got action=%q role=%q", entryPrepareReq.Action, entryPrepareReq.Role)
+	}
+	if len(*h.relayCreates) != 0 {
+		t.Fatalf("relay must not be created before both agents prepare, got %#v", *h.relayCreates)
+	}
+	return dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+}
+
+func dispatchExitStartAfterPreparedForTest(t *testing.T, h *vpnHarness, session *model.AgentVPNSession, policy *model.AgentVPNPolicy) model.VPNControlRequest {
+	t.Helper()
+	prepared, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStatePrepared,
+		Logs:      []string{"[core] prepare=downloaded path=/tmp/sing-box temporary=true"},
+	})
+	if err != nil {
+		t.Fatalf("handle exit prepared: %v", err)
+	}
+	if prepared.ExitState != model.VPNStatePrepared || prepared.EntryState != model.VPNStateStarting {
+		t.Fatalf("exit prepared must wait for entry prepare, got entry=%q exit=%q", prepared.EntryState, prepared.ExitState)
+	}
+	assertNoTask(t, h.exitStream)
+	prepared, err = h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleEntry,
+		State:     model.VPNStatePrepared,
+		Logs:      []string{"[core] prepare=reused path=/tmp/sing-box temporary=true"},
+	})
+	if err != nil {
+		t.Fatalf("handle entry prepared: %v", err)
+	}
+	if prepared.ExitState != model.VPNStateStarting || prepared.EntryState != model.VPNStatePending {
+		t.Fatalf("both prepared must dispatch exit start, got entry=%q exit=%q", prepared.EntryState, prepared.ExitState)
+	}
+	_, exitStartReq := readVPNTask(t, h.exitStream)
+	if exitStartReq.Action != model.VPNActionStart || exitStartReq.Role != model.VPNRoleExit {
+		t.Fatalf("expected start exit request, got action=%q role=%q", exitStartReq.Action, exitStartReq.Role)
+	}
+	return exitStartReq
 }
 
 func readVPNTask(t *testing.T, stream *capturedTaskStream) (*pb.Task, model.VPNControlRequest) {

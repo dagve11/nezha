@@ -261,7 +261,7 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 		Mode:          policy.Mode,
 		RelayMode:     model.VPNRelayModeDashboard,
 		State:         model.VPNStateStarting,
-		EntryState:    model.VPNStatePending,
+		EntryState:    model.VPNStateStarting,
 		ExitState:     model.VPNStateStarting,
 		EntryStreamID: entryStreamID,
 		ExitStreamID:  exitStreamID,
@@ -281,25 +281,41 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 	v.sessionPolicies[session.SessionID] = cloneVPNPolicy(policy)
 	v.mu.Unlock()
 
-	if VPNRelayCreator != nil {
-		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
-		v.appendControlLog(session.SessionID, "relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
-	}
-
-	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, model.VPNActionStart, token); err != nil {
+	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, model.VPNActionPrepare, ""); err != nil {
 		session.State = model.VPNStateFailed
 		session.ExitState = model.VPNStateFailed
 		session.LastError = err.Error()
 		_ = DB.Save(session).Error
 		v.finalizeVPNSessionRuntime(session.SessionID)
 		_ = v.writeAudit(actor, model.VPNAuditActionStartSession, session.SessionID, policy.EntryServerID, policy.ExitServerID, false, err.Error(), map[string]string{
-			"stage":              "exit_start_dispatch",
+			"stage":              "exit_prepare_dispatch",
 			"cleanup_dispatched": "false",
 		})
 		v.notifyFailure(policy, session, "")
 		return session, err
 	}
-	_ = v.writeAudit(actor, model.VPNAuditActionStartSession, session.SessionID, policy.EntryServerID, policy.ExitServerID, true, "exit start dispatched", vpnPolicyAuditDetail(policy))
+	if err := v.sendControl(entry, session, policy, model.VPNRoleEntry, model.VPNActionPrepare, ""); err != nil {
+		session.State = model.VPNStateFailed
+		session.EntryState = model.VPNStateFailed
+		session.LastError = err.Error()
+		cleanupErrors := v.dispatchSessionCleanupStops(session, policy)
+		if len(cleanupErrors) > 0 {
+			session.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+		}
+		_ = DB.Save(session).Error
+		v.finalizeVPNSessionRuntime(session.SessionID)
+		auditDetail := map[string]string{
+			"stage":              "entry_prepare_dispatch",
+			"cleanup_dispatched": "true",
+		}
+		if len(cleanupErrors) > 0 {
+			auditDetail["cleanup_errors"] = strings.Join(cleanupErrors, "; ")
+		}
+		_ = v.writeAudit(actor, model.VPNAuditActionStartSession, session.SessionID, policy.EntryServerID, policy.ExitServerID, false, session.LastError, auditDetail)
+		v.notifyFailure(policy, session, "")
+		return session, err
+	}
+	_ = v.writeAudit(actor, model.VPNAuditActionStartSession, session.SessionID, policy.EntryServerID, policy.ExitServerID, true, "core prepare dispatched", vpnPolicyAuditDetail(policy))
 	return session, nil
 }
 
@@ -340,7 +356,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		v.appendControlLog(session.SessionID, "session failed by %s agent: %s", result.Role, firstNonEmptyString(session.LastError, result.LastError, "unknown error"))
 		cleanupDispatched := false
 		cleanupErrors := make([]string, 0, 2)
-		if result.Role == model.VPNRoleEntry && session.ExitState == model.VPNStateRunning {
+		if shouldDispatchVPNFailureCleanup(wasRunning, &session, result) {
 			cleanupErrors = v.dispatchSessionCleanupStops(&session, policy)
 			cleanupDispatched = true
 		}
@@ -365,6 +381,17 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			v.notifyRuntimeFailure(policy, &session, cleanupErrors, agentCleanupLogs)
 		} else {
 			v.notifyLifecycleFailure(policy, &session, result.Action, agentCleanupLogs)
+		}
+		return &session, nil
+	}
+
+	if result.Action == model.VPNActionPrepare && result.State == model.VPNStatePrepared {
+		if session.EntryState == model.VPNStatePrepared && session.ExitState == model.VPNStatePrepared {
+			return v.startPreparedVPNSession(&session, policy, model.VPNActionStart)
+		}
+		v.appendControlLog(session.SessionID, "core prepared on %s agent; waiting for peer", result.Role)
+		if err := DB.Save(&session).Error; err != nil {
+			return nil, err
 		}
 		return &session, nil
 	}
@@ -763,6 +790,82 @@ func (v *VPNClass) dispatchSessionCleanupStops(session *model.AgentVPNSession, p
 		}
 	}
 	return cleanupErrors
+}
+
+func shouldDispatchVPNFailureCleanup(wasRunning bool, session *model.AgentVPNSession, result model.VPNControlResult) bool {
+	if session == nil {
+		return false
+	}
+	if result.Action == model.VPNActionPrepare || result.Action == model.VPNActionStart || result.Action == model.VPNActionRestart {
+		return true
+	}
+	return wasRunning && result.Role == model.VPNRoleEntry && session.ExitState == model.VPNStateRunning
+}
+
+func (v *VPNClass) startPreparedVPNSession(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, action string) (*model.AgentVPNSession, error) {
+	if session == nil {
+		return nil, errors.New("vpn session is required")
+	}
+	if policy == nil {
+		err := errors.New("vpn policy is required")
+		session.State = model.VPNStateFailed
+		session.LastError = err.Error()
+		_ = DB.Save(session).Error
+		v.finalizeVPNSessionRuntime(session.SessionID)
+		return session, err
+	}
+	exit, ok := ServerShared.Get(session.ExitServerID)
+	if !ok || exit == nil || exit.GetTaskStream() == nil {
+		err := fmt.Errorf("exit server %d is offline", session.ExitServerID)
+		return v.failPreparedVPNStart(session, policy, action, "exit_offline_after_core_prepared", err)
+	}
+	token, err := v.tokenForSession(session)
+	if err != nil {
+		return v.failPreparedVPNStart(session, policy, action, "exit_token_missing_after_core_prepared", err)
+	}
+
+	if VPNRelayCreator != nil {
+		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
+		v.appendControlLog(session.SessionID, "relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
+	}
+	session.State = model.VPNStateStarting
+	session.EntryState = model.VPNStatePending
+	session.ExitState = model.VPNStateStarting
+	if err := DB.Save(session).Error; err != nil {
+		return nil, err
+	}
+	v.appendControlLog(session.SessionID, "core prepared on both agents; dispatching exit %s", action)
+	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, action, token); err != nil {
+		return v.failPreparedVPNStart(session, policy, action, "exit_start_dispatch", err)
+	}
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, vpnLifecycleFailureAuditAction(action), session.SessionID, session.EntryServerID, session.ExitServerID, true, "exit "+action+" dispatched", vpnPolicyAuditDetail(policy))
+	return session, nil
+}
+
+func (v *VPNClass) failPreparedVPNStart(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, action string, stage string, cause error) (*model.AgentVPNSession, error) {
+	if cause == nil {
+		cause = errors.New("vpn start failed")
+	}
+	session.State = model.VPNStateFailed
+	session.ExitState = model.VPNStateFailed
+	session.LastError = cause.Error()
+	v.appendControlLog(session.SessionID, "exit %s blocked after core prepared: %s", action, session.LastError)
+	cleanupErrors := v.dispatchSessionCleanupStops(session, policy)
+	if len(cleanupErrors) > 0 {
+		session.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+	}
+	_ = DB.Save(session).Error
+	auditDetail := map[string]string{
+		"stage":              vpnLifecycleFailureStage(action, stage),
+		"cleanup_dispatched": "true",
+	}
+	if len(cleanupErrors) > 0 {
+		auditDetail["cleanup_errors"] = strings.Join(cleanupErrors, "; ")
+	}
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, vpnLifecycleFailureAuditAction(action), session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, auditDetail)
+	v.finalizeVPNSessionRuntime(session.SessionID)
+	v.notifyLifecycleFailure(policy, session, action, "")
+	return session, cause
 }
 
 func (v *VPNClass) recordRelayTraffic(sessionID string, uploadBytes uint64, downloadBytes uint64, activeConnections uint32) {
@@ -1490,6 +1593,9 @@ func canHandleVPNResultWithoutPolicy(result model.VPNControlResult) bool {
 	if result.Action == model.VPNActionLogs || result.Action == model.VPNActionCleanup || result.Action == model.VPNActionStatus {
 		return true
 	}
+	if result.Action == model.VPNActionPrepare && result.State == model.VPNStatePrepared {
+		return true
+	}
 	if (result.Action == model.VPNActionStart || result.Action == model.VPNActionRestart) &&
 		(result.Role == model.VPNRoleExit || result.Role == model.VPNRoleEntry) &&
 		result.State == model.VPNStateRunning {
@@ -1684,6 +1790,18 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 		},
 		Core:            buildVPNCoreSpec(policy),
 		DashboardBypass: buildVPNDashboardBypass(session),
+	}
+	if action == model.VPNActionPrepare {
+		req.PeerServerID = 0
+		req.RelayStreamID = ""
+		req.Token = ""
+		req.ListenHTTP = ""
+		req.ListenSOCKS = ""
+		req.TunName = ""
+		req.Rules = model.VPNRules{}
+		req.Limits = model.VPNLimits{}
+		req.DashboardBypass = nil
+		return req
 	}
 	if role == model.VPNRoleEntry && isVPNTunMode(policy.Mode) {
 		req.DNSServer = strings.TrimSpace(policy.DNSServer)
