@@ -516,6 +516,15 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 	if session.UploadBytes != 12 || session.DownloadBytes != 34 || session.ActiveConnections != 2 {
 		t.Fatalf("traffic counters not updated: upload=%d download=%d conns=%d", session.UploadBytes, session.DownloadBytes, session.ActiveConnections)
 	}
+	if session.LocalSOCKS != "127.0.0.1:1080" {
+		t.Fatalf("local SOCKS was not updated from agent result: %q", session.LocalSOCKS)
+	}
+	logs := strings.Join(h.vpn.SessionLogs(session.SessionID), "\n")
+	if !strings.Contains(logs, "sent start request to exit agent") ||
+		!strings.Contains(logs, "agent report server=") ||
+		!strings.Contains(logs, "session started; entry and exit agents are running") {
+		t.Fatalf("control plane logs missing dispatch/result/running markers: %s", logs)
+	}
 	if len(*h.notifications) != 1 {
 		t.Fatalf("expected one start-success notification, got %d", len(*h.notifications))
 	}
@@ -1655,7 +1664,10 @@ func TestVPNControlResultCachesAgentSidecarLogs(t *testing.T) {
 	}
 
 	logs := h.vpn.SessionLogs(session.SessionID)
-	if strings.Join(logs, "\n") != "entry log 1\nentry log 2" {
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "agent report") ||
+		!strings.Contains(joined, "entry log 1") ||
+		!strings.Contains(joined, "entry log 2") {
 		t.Fatalf("expected cached agent logs, got %#v", logs)
 	}
 }

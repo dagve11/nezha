@@ -265,12 +265,16 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 		ExitState:     model.VPNStateStarting,
 		EntryStreamID: entryStreamID,
 		ExitStreamID:  exitStreamID,
+		LocalHTTP:     policy.ListenHTTP,
+		LocalSOCKS:    policy.ListenSOCKS,
+		TunName:       policy.TunName,
 		StartedAt:     now,
 		ExpiresAt:     now.Add(time.Duration(policy.ExpiresSeconds) * time.Second),
 	}
 	if err := DB.Create(session).Error; err != nil {
 		return nil, err
 	}
+	v.appendControlLog(session.SessionID, "session created policy=%d mode=%s entry=%d exit=%d", policy.ID, policy.Mode, policy.EntryServerID, policy.ExitServerID)
 
 	v.mu.Lock()
 	v.sessionTokens[session.SessionID] = token
@@ -279,6 +283,7 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 
 	if VPNRelayCreator != nil {
 		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
+		v.appendControlLog(session.SessionID, "relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
 	}
 
 	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, model.VPNActionStart, token); err != nil {
@@ -304,9 +309,11 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		return nil, err
 	}
 	if !reporterMatchesVPNRole(reporterServerID, result.Role, &session) {
+		v.appendControlLog(session.SessionID, "ignored unauthorized agent report server=%d role=%s action=%s state=%s", reporterServerID, result.Role, result.Action, result.State)
 		return nil, fmt.Errorf("server %d is not authorized to report %s for session %s", reporterServerID, result.Role, session.SessionID)
 	}
 
+	v.appendControlLog(session.SessionID, "agent report server=%d role=%s action=%s state=%s%s", reporterServerID, result.Role, result.Action, result.State, vpnControlResultDetail(result))
 	if len(result.Logs) > 0 {
 		v.appendSessionLogs(session.SessionID, result.Logs)
 	}
@@ -330,6 +337,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		if session.LastError == "" {
 			session.LastError = result.LastError
 		}
+		v.appendControlLog(session.SessionID, "session failed by %s agent: %s", result.Role, firstNonEmptyString(session.LastError, result.LastError, "unknown error"))
 		cleanupDispatched := false
 		cleanupErrors := make([]string, 0, 2)
 		if result.Role == model.VPNRoleEntry && session.ExitState == model.VPNStateRunning {
@@ -375,6 +383,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		if session.LastError == "" {
 			session.LastError = result.LastError
 		}
+		v.appendControlLog(session.SessionID, "session stopped by %s agent", result.Role)
 		if err := DB.Save(&session).Error; err != nil {
 			return nil, err
 		}
@@ -399,6 +408,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			session.State = model.VPNStateFailed
 			session.EntryState = model.VPNStateFailed
 			session.LastError = fmt.Sprintf("entry server %d is offline", session.EntryServerID)
+			v.appendControlLog(session.SessionID, "entry start blocked after exit ready: %s", session.LastError)
 			if err := DB.Save(&session).Error; err != nil {
 				return nil, err
 			}
@@ -428,6 +438,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			session.State = model.VPNStateFailed
 			session.EntryState = model.VPNStateFailed
 			session.LastError = err.Error()
+			v.appendControlLog(session.SessionID, "entry start blocked after exit ready: %s", session.LastError)
 			_ = DB.Save(&session).Error
 			cleanupErrors := v.dispatchSessionCleanupStops(&session, policy)
 			if len(cleanupErrors) > 0 {
@@ -450,6 +461,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			session.State = model.VPNStateFailed
 			session.EntryState = model.VPNStateFailed
 			session.LastError = err.Error()
+			v.appendControlLog(session.SessionID, "entry start dispatch failed after exit ready: %s", session.LastError)
 			_ = DB.Save(&session).Error
 			cleanupErrors := v.dispatchSessionCleanupStops(&session, policy)
 			if len(cleanupErrors) > 0 {
@@ -478,9 +490,11 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 				return nil, err
 			}
 			if result.Action == model.VPNActionRestart {
+				v.appendControlLog(session.SessionID, "session restarted; entry and exit agents are running")
 				_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionRestart, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session restarted", vpnStartSuccessAuditDetail(policy, v.SessionLogs(session.SessionID)))
 				v.notifyRestarted(policy, &session)
 			} else if result.Action == model.VPNActionStart {
+				v.appendControlLog(session.SessionID, "session started; entry and exit agents are running")
 				_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStartSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session started", vpnStartSuccessAuditDetail(policy, v.SessionLogs(session.SessionID)))
 				v.notifyStarted(policy, &session)
 			}
@@ -519,12 +533,16 @@ func (v *VPNClass) StopSession(actor VPNActor, sessionID string) (*model.AgentVP
 			stopErrors = append(stopErrors, "entry: "+err.Error())
 			log.Printf("NEZHA>> VPN manual stop dispatch failed: session=%s role=entry err=%v", session.SessionID, err)
 		}
+	} else {
+		v.appendControlLog(session.SessionID, "skip stop request to entry agent server=%d: offline", session.EntryServerID)
 	}
 	if exit, ok := ServerShared.Get(session.ExitServerID); ok && exit.GetTaskStream() != nil {
 		if err := v.sendControl(exit, &session, policy, model.VPNRoleExit, model.VPNActionStop, token); err != nil {
 			stopErrors = append(stopErrors, "exit: "+err.Error())
 			log.Printf("NEZHA>> VPN manual stop dispatch failed: session=%s role=exit err=%v", session.SessionID, err)
 		}
+	} else {
+		v.appendControlLog(session.SessionID, "skip stop request to exit agent server=%d: offline", session.ExitServerID)
 	}
 
 	now := time.Now()
@@ -535,6 +553,11 @@ func (v *VPNClass) StopSession(actor VPNActor, sessionID string) (*model.AgentVP
 		session.LastError = "cleanup dispatch failed: " + strings.Join(stopErrors, "; ")
 	}
 	session.StoppedAt = &now
+	if len(stopErrors) > 0 {
+		v.appendControlLog(session.SessionID, "manual stop completed with cleanup dispatch errors: %s", strings.Join(stopErrors, "; "))
+	} else {
+		v.appendControlLog(session.SessionID, "manual stop completed; session marked stopped")
+	}
 	if err := DB.Save(&session).Error; err != nil {
 		return nil, err
 	}
@@ -584,18 +607,22 @@ func (v *VPNClass) RefreshSessionStatus(actor VPNActor, sessionID string) (*mode
 	if err != nil {
 		policy = v.fallbackVPNPolicyForLostSession(&session)
 	}
+	v.appendControlLog(session.SessionID, "status query requested")
 	if err := v.querySessionStatus(&session, policy, session.EntryServerID, model.VPNRoleEntry); err != nil {
+		v.appendControlLog(session.SessionID, "status query failed for entry agent: %v", err)
 		_ = v.writeAudit(actor, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, err.Error(), map[string]string{
 			"role": model.VPNRoleEntry,
 		})
 		return &session, err
 	}
 	if err := v.querySessionStatus(&session, policy, session.ExitServerID, model.VPNRoleExit); err != nil {
+		v.appendControlLog(session.SessionID, "status query failed for exit agent: %v", err)
 		_ = v.writeAudit(actor, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, err.Error(), map[string]string{
 			"role": model.VPNRoleExit,
 		})
 		return &session, err
 	}
+	v.appendControlLog(session.SessionID, "status query dispatched; waiting for agent reports")
 	_ = v.writeAudit(actor, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, true, "status query dispatched", nil)
 	return &session, nil
 }
@@ -935,24 +962,48 @@ func (v *VPNClass) appendSessionLogs(sessionID string, lines []string) {
 	v.sessionLogs[sessionID] = logs
 }
 
+func (v *VPNClass) appendControlLog(sessionID string, format string, args ...any) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	v.appendSessionLogs(sessionID, []string{"[dashboard] " + fmt.Sprintf(format, args...)})
+}
+
 func (v *VPNClass) sendControl(server *model.Server, session *model.AgentVPNSession, policy *model.AgentVPNPolicy, role string, action string, token string) error {
 	if server == nil {
-		return errors.New("server not found")
+		err := errors.New("server not found")
+		if session != nil {
+			v.appendControlLog(session.SessionID, "failed to send %s request to %s agent: %v", action, role, err)
+		}
+		return err
 	}
 	stream := server.GetTaskStream()
 	if stream == nil {
-		return fmt.Errorf("server %d is offline", server.ID)
+		err := fmt.Errorf("server %d is offline", server.ID)
+		if session != nil {
+			v.appendControlLog(session.SessionID, "failed to send %s request to %s agent server=%d name=%q: %v", action, role, server.ID, server.Name, err)
+		}
+		return err
 	}
 	req := buildVPNControlRequest(session, policy, role, action, token)
 	data, err := json.Marshal(req)
 	if err != nil {
+		if session != nil {
+			v.appendControlLog(session.SessionID, "failed to encode %s request for %s agent server=%d name=%q: %v", action, role, server.ID, server.Name, err)
+		}
 		return err
 	}
-	return stream.Send(&pb.Task{
+	err = stream.Send(&pb.Task{
 		Id:   session.ID,
 		Type: model.TaskTypeVPNControl,
 		Data: string(data),
 	})
+	if err != nil {
+		v.appendControlLog(session.SessionID, "failed to send %s request to %s agent server=%d name=%q: %v", action, role, server.ID, server.Name, err)
+		return err
+	}
+	v.appendControlLog(session.SessionID, "sent %s request to %s agent server=%d name=%q task_id=%d", action, role, server.ID, server.Name, session.ID)
+	return nil
 }
 
 func (v *VPNClass) querySessionStatus(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, serverID uint64, role string) error {
@@ -1018,12 +1069,16 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	session.ExitState = model.VPNStateStarting
 	session.EntryStreamID = entryStreamID
 	session.ExitStreamID = exitStreamID
+	session.LocalHTTP = policy.ListenHTTP
+	session.LocalSOCKS = policy.ListenSOCKS
+	session.TunName = policy.TunName
 	session.LastError = ""
 	session.StoppedAt = nil
 	session.StartedAt = now
 	if err := DB.Save(session).Error; err != nil {
 		return err
 	}
+	v.appendControlLog(session.SessionID, "%s requested; relay streams rotated entry_stream=%s exit_stream=%s", action, session.EntryStreamID, session.ExitStreamID)
 
 	v.mu.Lock()
 	v.sessionTokens[session.SessionID] = token
@@ -1032,6 +1087,7 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 
 	if VPNRelayCreator != nil {
 		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
+		v.appendControlLog(session.SessionID, "relay recreated entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
 	}
 
 	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, action, token); err != nil {
@@ -1577,6 +1633,7 @@ func (v *VPNClass) recordRestartSessionPreflightFailure(actor VPNActor, session 
 	if session == nil || policy == nil || cause == nil {
 		return
 	}
+	v.appendControlLog(session.SessionID, "%s preflight failed stage=%s: %s", action, stage, cause.Error())
 	detail := vpnPolicyAuditDetail(policy)
 	if detail == nil {
 		detail = map[string]string{}
@@ -1655,6 +1712,15 @@ func updateSessionFromVPNResult(session *model.AgentVPNSession, result model.VPN
 	} else if result.Role == model.VPNRoleExit {
 		session.ExitState = result.State
 	}
+	if result.LocalHTTP != "" {
+		session.LocalHTTP = result.LocalHTTP
+	}
+	if result.LocalSOCKS != "" {
+		session.LocalSOCKS = result.LocalSOCKS
+	}
+	if result.TunName != "" {
+		session.TunName = result.TunName
+	}
 	if result.UploadBytes != 0 {
 		session.UploadBytes = result.UploadBytes
 	}
@@ -1667,6 +1733,44 @@ func updateSessionFromVPNResult(session *model.AgentVPNSession, result model.VPN
 	if result.LastError != "" {
 		session.LastError = result.LastError
 	}
+}
+
+func vpnControlResultDetail(result model.VPNControlResult) string {
+	parts := make([]string, 0, 6)
+	if result.LocalSOCKS != "" {
+		parts = append(parts, "socks="+result.LocalSOCKS)
+	}
+	if result.LocalHTTP != "" {
+		parts = append(parts, "http="+result.LocalHTTP)
+	}
+	if result.TunName != "" {
+		parts = append(parts, "tun="+result.TunName)
+	}
+	if result.UploadBytes != 0 || result.DownloadBytes != 0 {
+		parts = append(parts, fmt.Sprintf("traffic=%d/%d", result.UploadBytes, result.DownloadBytes))
+	}
+	if result.ActiveConns != 0 {
+		parts = append(parts, fmt.Sprintf("connections=%d", result.ActiveConns))
+	}
+	if result.LastError != "" {
+		parts = append(parts, "error="+result.LastError)
+	}
+	if len(result.Logs) > 0 {
+		parts = append(parts, fmt.Sprintf("agent_logs=%d", len(result.Logs)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func reporterMatchesVPNRole(reporterServerID uint64, role string, session *model.AgentVPNSession) bool {

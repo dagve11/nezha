@@ -220,6 +220,9 @@ type AgentVPNSession struct {
 	ExitState         string     `json:"exit_state"`
 	EntryStreamID     string     `json:"entry_stream_id"`
 	ExitStreamID      string     `json:"exit_stream_id"`
+	LocalHTTP         string     `json:"local_http"`
+	LocalSOCKS        string     `json:"local_socks"`
+	TunName           string     `json:"tun_name"`
 	UploadBytes       uint64     `json:"upload_bytes"`
 	DownloadBytes     uint64     `json:"download_bytes"`
 	ActiveConnections uint32     `json:"active_connections"`
