@@ -338,23 +338,30 @@ func (s *NezhaHandler) IOStream(stream pb.NezhaService_IOStreamServer) error {
 		return err
 	}
 	iw := grpcx.NewIOStreamWrapper(stream)
+
+	// 创建专用的 context 用于控制 keepalive goroutine
+	keepaliveCtx, cancelKeepalive := context.WithCancel(stream.Context())
+	defer cancelKeepalive() // 确保函数退出时停止 keepalive
+
 	go func() {
-		ticker := time.NewTicker(time.Second * 30)
+		ticker := time.NewTicker(time.Second * 10) // 从 30 秒改为 10 秒，更快检测断开
 		defer ticker.Stop()
 		for {
 			select {
-			case <-stream.Context().Done():
+			case <-keepaliveCtx.Done(): // 使用专用 context
+				_ = iw.Close()
 				return
 			case <-ticker.C:
 				if _, err := iw.Write([]byte{}); err != nil {
 					log.Printf("NEZHA>> IOStream keepAlive error: %v\n", err)
+					_ = iw.Close()
 					return
 				}
 			}
 		}
 	}()
 	if err := s.AgentConnected(streamId, iw); err != nil {
-		return err
+		return err // defer cancelKeepalive() 会执行
 	}
 	iw.Wait()
 	return nil

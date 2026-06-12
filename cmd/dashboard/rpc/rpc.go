@@ -10,6 +10,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 
@@ -22,7 +23,20 @@ import (
 )
 
 func ServeRPC() *grpc.Server {
-	server := grpc.NewServer(grpc.ChainUnaryInterceptor(getRealIp, waf))
+	server := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(getRealIp, waf),
+		// Server 端 Keepalive 配置：防止空闲连接占用资源
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 15 * time.Minute, // 15 分钟空闲后关闭连接
+			Time:              10 * time.Second, // 每 10 秒发送 keepalive ping
+			Timeout:           3 * time.Second,  // 3 秒无响应视为客户端死亡
+		}),
+		// Keepalive 强制策略：防止客户端发送过于频繁的 keepalive
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             5 * time.Second, // 客户端 keepalive 最小间隔
+			PermitWithoutStream: true,            // 允许没有活跃 stream 时发送 keepalive
+		}),
+	)
 	rpcService.NezhaHandlerSingleton = rpcService.NewNezhaHandler()
 	handler := rpcService.NezhaHandlerSingleton
 	// Install the IOStream revocation hook so ServerTransferShared can tear

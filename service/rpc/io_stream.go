@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"errors"
 	"io"
 	"sync"
@@ -165,8 +166,6 @@ func (s *NezhaHandler) CloseStream(streamId string) error {
 	return nil
 }
 
-
-
 func (s *NezhaHandler) UserConnected(streamId string, userIo io.ReadWriteCloser) error {
 	stream, err := s.GetStream(streamId)
 	if err != nil {
@@ -201,37 +200,36 @@ func (s *NezhaHandler) StartStream(streamId string, timeout time.Duration) error
 		return err
 	}
 
-	timeoutTimer := time.NewTimer(timeout)
+	// 使用 context 替代 time.After 避免 timer 泄漏
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-LOOP:
-	for {
+	userIoConnectCh := stream.userIoConnectCh
+	agentIoConnectCh := stream.agentIoConnectCh
+	for stream.userIo == nil || stream.agentIo == nil {
 		select {
-		case <-stream.userIoConnectCh:
-			if stream.agentIo != nil {
-				timeoutTimer.Stop()
-				break LOOP
-			}
-		case <-stream.agentIoConnectCh:
+		case <-userIoConnectCh:
+			userIoConnectCh = nil
+		case <-agentIoConnectCh:
+			agentIoConnectCh = nil
+		case <-ctx.Done():
 			if stream.userIo != nil {
-				timeoutTimer.Stop()
-				break LOOP
+				stream.userIo.Close()
 			}
-		case <-time.After(timeout):
-			break LOOP
+			if stream.agentIo != nil {
+				stream.agentIo.Close()
+			}
+			if stream.userIo == nil && stream.agentIo == nil {
+				return singleton.Localizer.ErrorT("timeout: no connection established")
+			}
+			if stream.userIo == nil {
+				return singleton.Localizer.ErrorT("timeout: user connection not established")
+			}
+			return singleton.Localizer.ErrorT("timeout: agent connection not established")
 		}
-		time.Sleep(time.Millisecond * 500)
 	}
 
-	if stream.userIo == nil && stream.agentIo == nil {
-		return singleton.Localizer.ErrorT("timeout: no connection established")
-	}
-	if stream.userIo == nil {
-		return singleton.Localizer.ErrorT("timeout: user connection not established")
-	}
-	if stream.agentIo == nil {
-		return singleton.Localizer.ErrorT("timeout: agent connection not established")
-	}
-
+	// 双方都连接成功，启动双向转发
 	isDone := new(atomic.Bool)
 	endCh := make(chan struct{})
 
