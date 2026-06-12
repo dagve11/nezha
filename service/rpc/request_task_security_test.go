@@ -308,7 +308,7 @@ func TestRequestTaskDispatchesVPNControlResult(t *testing.T) {
 		singleton.VPNNotificationSender = originalNotificationSender
 	})
 
-	entrySent := make(chan *pb.Task, 1)
+	entrySent := make(chan *pb.Task, 2)
 	connectRequestTaskSecurityTaskStreamWithSendHook(t, entry.ID, nil, func(task *pb.Task) {
 		entrySent <- task
 	})
@@ -328,6 +328,39 @@ func TestRequestTaskDispatchesVPNControlResult(t *testing.T) {
 	session, err := singleton.VPNShared.StartSession(singleton.VPNActor{UserID: 200, Role: model.RoleMember}, policy.ID)
 	if err != nil {
 		t.Fatalf("start vpn session: %v", err)
+	}
+
+	select {
+	case task := <-entrySent:
+		if task.GetType() != model.TaskTypeVPNControl {
+			t.Fatalf("expected VPN control task, got %d", task.GetType())
+		}
+		var req model.VPNControlRequest
+		if err := json.Unmarshal([]byte(task.GetData()), &req); err != nil {
+			t.Fatalf("decode entry prepare request: %v", err)
+		}
+		if req.SessionID != session.SessionID || req.Role != model.VPNRoleEntry || req.Action != model.VPNActionPrepare {
+			t.Fatalf("unexpected entry prepare task: %+v", req)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("start session must dispatch entry prepare task")
+	}
+
+	if _, err := singleton.VPNShared.HandleControlResult(exit.ID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStatePrepared,
+	}); err != nil {
+		t.Fatalf("handle exit prepared: %v", err)
+	}
+	if _, err := singleton.VPNShared.HandleControlResult(entry.ID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionPrepare,
+		Role:      model.VPNRoleEntry,
+		State:     model.VPNStatePrepared,
+	}); err != nil {
+		t.Fatalf("handle entry prepared: %v", err)
 	}
 
 	resultData, err := json.Marshal(model.VPNControlResult{
