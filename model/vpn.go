@@ -96,10 +96,14 @@ type VPNLimits struct {
 }
 
 type VPNCoreSpec struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	SHA256      string `json:"sha256"`
-	DownloadURL string `json:"download_url,omitempty"`
+	Name              string `json:"name"`
+	Version           string `json:"version"`
+	SHA256            string `json:"sha256"`
+	DownloadURL       string `json:"download_url,omitempty"`
+	DownloadBaseURL   string `json:"download_base_url,omitempty"`
+	CNDownloadBaseURL string `json:"cn_download_base_url,omitempty"`
+	ManifestURL       string `json:"manifest_url,omitempty"`
+	CNManifestURL     string `json:"cn_manifest_url,omitempty"`
 }
 
 type VPNControlResult struct {

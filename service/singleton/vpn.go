@@ -23,7 +23,13 @@ import (
 	pb "github.com/nezhahq/nezha/proto"
 )
 
-const defaultVPNExpiresSeconds = 3600
+const (
+	defaultVPNExpiresSeconds        = 3600
+	defaultVPNCoreDownloadBaseURL   = "https://github.com/dagve11/sb-core/releases/download/V1.0.0"
+	defaultVPNCoreCNDownloadBaseURL = "https://gitee.com/AGZZY11/sb-core/releases/download/V1.0.0"
+	defaultVPNCoreManifestURL       = defaultVPNCoreDownloadBaseURL + "/manifest.json"
+	defaultVPNCoreCNManifestURL     = defaultVPNCoreCNDownloadBaseURL + "/manifest.json"
+)
 
 var vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
@@ -1619,12 +1625,7 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 			MaxConnections:     policy.MaxConnections,
 			IdleTimeoutSeconds: policy.IdleTimeoutSeconds,
 		},
-		Core: model.VPNCoreSpec{
-			Name:        "sing-box",
-			Version:     strings.TrimSpace(policy.CoreVersion),
-			SHA256:      strings.TrimSpace(policy.CoreSHA256),
-			DownloadURL: strings.TrimSpace(policy.CoreDownloadURL),
-		},
+		Core:            buildVPNCoreSpec(policy),
 		DashboardBypass: buildVPNDashboardBypass(session),
 	}
 	if role == model.VPNRoleEntry && isVPNTunMode(policy.Mode) {
@@ -2174,6 +2175,23 @@ func vpnPolicyFromForm(userID uint64, form model.AgentVPNPolicyForm) *model.Agen
 		policy.Name = fmt.Sprintf("VPN %d -> %d", policy.EntryServerID, policy.ExitServerID)
 	}
 	return policy
+}
+
+func buildVPNCoreSpec(policy *model.AgentVPNPolicy) model.VPNCoreSpec {
+	spec := model.VPNCoreSpec{
+		Name:        "sing-box",
+		Version:     strings.TrimSpace(policy.CoreVersion),
+		SHA256:      strings.TrimSpace(policy.CoreSHA256),
+		DownloadURL: strings.TrimSpace(policy.CoreDownloadURL),
+	}
+	if spec.DownloadURL != "" {
+		return spec
+	}
+	spec.DownloadBaseURL = defaultVPNCoreDownloadBaseURL
+	spec.CNDownloadBaseURL = defaultVPNCoreCNDownloadBaseURL
+	spec.ManifestURL = defaultVPNCoreManifestURL
+	spec.CNManifestURL = defaultVPNCoreCNManifestURL
+	return spec
 }
 
 func setVPNRequestExtra(req *model.VPNControlRequest, key string, value string) {

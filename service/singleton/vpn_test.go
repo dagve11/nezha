@@ -1243,6 +1243,32 @@ func TestVPNStartSessionPassesPolicyCoreSpecToAgents(t *testing.T) {
 	assertVPNCoreSpec(t, entryReq.Core)
 }
 
+func TestVPNStartSessionPassesDefaultCoreMirrorsToAgents(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+
+	if _, err := h.vpn.StartSession(actor, policy.ID); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	_, exitReq := readVPNTask(t, h.exitStream)
+	if exitReq.Core.DownloadURL != "" {
+		t.Fatalf("default core spec must not force a single download URL, got %q", exitReq.Core.DownloadURL)
+	}
+	if exitReq.Core.DownloadBaseURL != defaultVPNCoreDownloadBaseURL {
+		t.Fatalf("default core base URL = %q, want %q", exitReq.Core.DownloadBaseURL, defaultVPNCoreDownloadBaseURL)
+	}
+	if exitReq.Core.CNDownloadBaseURL != defaultVPNCoreCNDownloadBaseURL {
+		t.Fatalf("default core CN base URL = %q, want %q", exitReq.Core.CNDownloadBaseURL, defaultVPNCoreCNDownloadBaseURL)
+	}
+	if exitReq.Core.ManifestURL != defaultVPNCoreManifestURL {
+		t.Fatalf("default core manifest URL = %q, want %q", exitReq.Core.ManifestURL, defaultVPNCoreManifestURL)
+	}
+	if exitReq.Core.CNManifestURL != defaultVPNCoreCNManifestURL {
+		t.Fatalf("default core CN manifest URL = %q, want %q", exitReq.Core.CNManifestURL, defaultVPNCoreCNManifestURL)
+	}
+}
+
 func TestVPNSavePolicyRejectsInvalidCoreSHA256(t *testing.T) {
 	h := newVPNHarness(t)
 	actor := VPNActor{UserID: 100, Role: model.RoleMember}
