@@ -442,6 +442,54 @@ func TestDeleteVPNPolicyRejectsActiveSessionPolicy(t *testing.T) {
 	require.Equal(t, int64(1), count)
 }
 
+func TestDeleteVPNPolicyActiveSessionResponseKeepsBusinessError(t *testing.T) {
+	setupVPNControllerFixture(t)
+
+	require.NoError(t, singleton.DB.Create(&model.AgentVPNPolicy{
+		Common:        model.Common{ID: 77, UserID: 200},
+		Name:          "active policy",
+		EntryServerID: 1,
+		ExitServerID:  2,
+		Mode:          model.VPNModeSystemProxy,
+		RuleMode:      model.VPNRuleModeGlobal,
+		ListenSOCKS:   "127.0.0.1:1080",
+	}).Error)
+	require.NoError(t, singleton.DB.Create(&model.AgentVPNSession{
+		Common:        model.Common{UserID: 200},
+		PolicyID:      77,
+		EntryServerID: 1,
+		ExitServerID:  2,
+		SessionID:     "active_session",
+		Mode:          model.VPNModeSystemProxy,
+		RelayMode:     model.VPNRelayModeDashboard,
+		State:         model.VPNStateRunning,
+		EntryState:    model.VPNStateRunning,
+		ExitState:     model.VPNStateRunning,
+		StartedAt:     time.Now(),
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}).Error)
+
+	r := gin.New()
+	handler := commonHandler(batchDeleteVPNPolicy)
+	r.POST("/batch-delete/vpn/policy", func(c *gin.Context) {
+		setAuthUser(c, 200, model.RoleMember)
+		handler(c)
+	})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/batch-delete/vpn/policy", strings.NewReader(`[77]`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	var response struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.False(t, response.Success)
+	require.Contains(t, response.Error, "active session")
+	require.NotEqual(t, "database error", response.Error)
+}
+
 func TestDeleteVPNPolicyWritesAuditWithPolicySnapshot(t *testing.T) {
 	ctx := setupVPNControllerFixture(t)
 

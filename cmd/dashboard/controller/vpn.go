@@ -68,7 +68,7 @@ func batchDeleteVPNPolicy(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	if err := singleton.VPNShared.DeletePolicies(vpnActorFromContext(c), ids); err != nil {
-		return nil, newGormError("%v", err)
+		return nil, err
 	}
 	return nil, nil
 }
