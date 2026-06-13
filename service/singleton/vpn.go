@@ -1895,6 +1895,7 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 		Core:            buildVPNCoreSpec(policy),
 		DashboardBypass: buildVPNDashboardBypass(session),
 	}
+	setVPNRequestExtra(&req, "core_session_id", policyCoreSessionID(policy.ID))
 	if action == model.VPNActionPrepare {
 		req.PeerServerID = 0
 		req.RelayStreamID = ""
