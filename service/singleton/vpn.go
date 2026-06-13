@@ -195,6 +195,63 @@ func (v *VPNClass) DeletePolicies(actor VPNActor, policyIDs []uint64) error {
 	return nil
 }
 
+func (v *VPNClass) PreparePolicyCore(actor VPNActor, policyID uint64) error {
+	return v.dispatchPolicyCoreControl(actor, policyID, model.VPNActionPrepare)
+}
+
+func (v *VPNClass) CleanupPolicyCore(actor VPNActor, policyID uint64) error {
+	return v.dispatchPolicyCoreControl(actor, policyID, model.VPNActionCleanup)
+}
+
+func (v *VPNClass) dispatchPolicyCoreControl(actor VPNActor, policyID uint64, action string) error {
+	policy, err := v.getPolicyForActor(actor, policyID)
+	if err != nil {
+		return err
+	}
+	if err := validateVPNPolicyRuntime(policy); err != nil {
+		return err
+	}
+	entry, err := v.getUsableServer(actor, policy.EntryServerID)
+	if err != nil {
+		return err
+	}
+	exit, err := v.getUsableServer(actor, policy.ExitServerID)
+	if err != nil {
+		return err
+	}
+	if entry.GetTaskStream() == nil {
+		return fmt.Errorf("entry server %d is offline", entry.ID)
+	}
+	if exit.GetTaskStream() == nil {
+		return fmt.Errorf("exit server %d is offline", exit.ID)
+	}
+
+	expiresSeconds := policy.ExpiresSeconds
+	if expiresSeconds == 0 {
+		expiresSeconds = defaultVPNExpiresSeconds
+	}
+	session := &model.AgentVPNSession{
+		Common: model.Common{
+			ID:     policy.ID,
+			UserID: policy.GetUserID(),
+		},
+		PolicyID:      policy.ID,
+		EntryServerID: policy.EntryServerID,
+		ExitServerID:  policy.ExitServerID,
+		SessionID:     policyCoreSessionID(policy.ID),
+		Mode:          policy.Mode,
+		RelayMode:     model.VPNRelayModeDashboard,
+		ExpiresAt:     time.Now().Add(time.Duration(expiresSeconds) * time.Second),
+	}
+	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, action, ""); err != nil {
+		return err
+	}
+	if err := v.sendControl(entry, session, policy, model.VPNRoleEntry, action, ""); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVPNSession, error) {
 	policy, err := v.getPolicyForActor(actor, policyID)
 	if err != nil {
@@ -321,7 +378,11 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 
 func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPNControlResult) (*model.AgentVPNSession, error) {
 	var session model.AgentVPNSession
-	if err := DB.Where("session_id = ?", strings.TrimSpace(result.SessionID)).First(&session).Error; err != nil {
+	sessionID := strings.TrimSpace(result.SessionID)
+	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
+		if isPolicyCoreSessionID(sessionID) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if !reporterMatchesVPNRole(reporterServerID, result.Role, &session) {
@@ -2611,6 +2672,18 @@ func shouldAutoRestartVPNSession(policy *model.AgentVPNPolicy, session *model.Ag
 		return false
 	}
 	return session.State == model.VPNStateLost || session.State == model.VPNStateFailed
+}
+
+func policyCoreSessionID(policyID uint64) string {
+	return fmt.Sprintf("core_policy_%d", policyID)
+}
+
+func isPolicyCoreSessionID(sessionID string) bool {
+	if !strings.HasPrefix(sessionID, "core_policy_") {
+		return false
+	}
+	_, err := strconv.ParseUint(strings.TrimPrefix(sessionID, "core_policy_"), 10, 64)
+	return err == nil
 }
 
 func isVPNTerminalState(state string) bool {

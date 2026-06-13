@@ -73,6 +73,28 @@ func batchDeleteVPNPolicy(c *gin.Context) (any, error) {
 	return nil, nil
 }
 
+func prepareVPNPolicyCore(c *gin.Context) (any, error) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if err := singleton.VPNShared.PreparePolicyCore(vpnActorFromContext(c), id); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func cleanupVPNPolicyCore(c *gin.Context) (any, error) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if err := singleton.VPNShared.CleanupPolicyCore(vpnActorFromContext(c), id); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
 func listVPNSession(c *gin.Context) ([]*model.AgentVPNSession, error) {
 	var sessions []*model.AgentVPNSession
 	if err := singleton.DB.Order("id DESC").Find(&sessions).Error; err != nil {
