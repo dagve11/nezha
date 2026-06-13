@@ -51,13 +51,14 @@ const (
 )
 
 const (
-	VPNAuditActionCreatePolicy = "create_policy"
-	VPNAuditActionUpdatePolicy = "update_policy"
-	VPNAuditActionDeletePolicy = "delete_policy"
-	VPNAuditActionStartSession = "start_session"
-	VPNAuditActionStopSession  = "stop_session"
-	VPNAuditActionRestart      = "restart_session"
-	VPNAuditActionStatus       = "status_session"
+	VPNAuditActionCreatePolicy  = "create_policy"
+	VPNAuditActionUpdatePolicy  = "update_policy"
+	VPNAuditActionDeletePolicy  = "delete_policy"
+	VPNAuditActionStartSession  = "start_session"
+	VPNAuditActionStopSession   = "stop_session"
+	VPNAuditActionDeleteSession = "delete_session"
+	VPNAuditActionRestart       = "restart_session"
+	VPNAuditActionStatus        = "status_session"
 )
 
 type VPNControlRequest struct {

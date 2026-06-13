@@ -604,6 +604,37 @@ func (v *VPNClass) StopSession(actor VPNActor, sessionID string) (*model.AgentVP
 	return &session, nil
 }
 
+func (v *VPNClass) DeleteSession(actor VPNActor, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return errors.New("session_id is required")
+	}
+	var session model.AgentVPNSession
+	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
+		return err
+	}
+	if !actorCanUseVPNSession(actor, &session) {
+		return errors.New("permission denied")
+	}
+
+	if !isVPNTerminalState(session.State) {
+		stopped, err := v.StopSession(actor, sessionID)
+		if err != nil {
+			return err
+		}
+		if stopped != nil {
+			session = *stopped
+		}
+	}
+
+	v.forgetVPNSessionRuntime(sessionID)
+	if err := DB.Delete(&session).Error; err != nil {
+		return err
+	}
+	_ = v.writeAudit(actor, model.VPNAuditActionDeleteSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session deleted", nil)
+	return nil
+}
+
 func (v *VPNClass) RestartSession(actor VPNActor, sessionID string) (*model.AgentVPNSession, error) {
 	var session model.AgentVPNSession
 	if err := DB.Where("session_id = ?", strings.TrimSpace(sessionID)).First(&session).Error; err != nil {
@@ -1270,6 +1301,18 @@ func (v *VPNClass) finalizeVPNSessionRuntime(sessionID string) {
 	v.mu.Lock()
 	delete(v.sessionTokens, sessionID)
 	delete(v.relayTraffic, sessionID)
+	v.mu.Unlock()
+}
+
+func (v *VPNClass) forgetVPNSessionRuntime(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	v.finalizeVPNSessionRuntime(sessionID)
+	v.mu.Lock()
+	delete(v.sessionPolicies, sessionID)
+	delete(v.sessionLogs, sessionID)
 	v.mu.Unlock()
 }
 

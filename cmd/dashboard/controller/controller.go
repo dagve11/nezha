@@ -172,6 +172,7 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.GET("/vpn/session", commonHandler(listVPNSession))
 	auth.POST("/vpn/session/start", commonHandler(startVPNSession))
 	auth.POST("/vpn/session/:id/stop", commonHandler(stopVPNSession))
+	auth.POST("/vpn/session/:id/delete", commonHandler(deleteVPNSession))
 	auth.POST("/vpn/session/:id/restart", commonHandler(restartVPNSession))
 	auth.POST("/vpn/session/:id/status", commonHandler(statusVPNSession))
 	auth.GET("/ws/vpn/session/:id", commonHandler(vpnSessionStream))

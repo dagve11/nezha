@@ -94,6 +94,14 @@ func stopVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	return singleton.VPNShared.StopSession(vpnActorFromContext(c), sessionID)
 }
 
+func deleteVPNSession(c *gin.Context) (any, error) {
+	sessionID := strings.TrimSpace(c.Param("id"))
+	if err := singleton.VPNShared.DeleteSession(vpnActorFromContext(c), sessionID); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
 func restartVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	sessionID := strings.TrimSpace(c.Param("id"))
 	return singleton.VPNShared.RestartSession(vpnActorFromContext(c), sessionID)

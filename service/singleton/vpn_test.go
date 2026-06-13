@@ -3655,6 +3655,44 @@ func TestVPNStopSessionSendsEntryThenExitAndMarksStopped(t *testing.T) {
 	}
 }
 
+func TestVPNDeleteSessionStopsAndDeletesRecord(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+	session := startAndRunTestVPNSession(t, h, actor, policy)
+	h.vpn.appendSessionLogs(session.SessionID, []string{"session log line"})
+
+	if err := h.vpn.DeleteSession(actor, session.SessionID); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+
+	_, entryReq := readVPNTask(t, h.entryStream)
+	if entryReq.Action != model.VPNActionStop || entryReq.Role != model.VPNRoleEntry {
+		t.Fatalf("delete must stop entry first, got action=%q role=%q", entryReq.Action, entryReq.Role)
+	}
+	_, exitReq := readVPNTask(t, h.exitStream)
+	if exitReq.Action != model.VPNActionStop || exitReq.Role != model.VPNRoleExit {
+		t.Fatalf("delete must stop exit second, got action=%q role=%q", exitReq.Action, exitReq.Role)
+	}
+
+	var stored model.AgentVPNSession
+	err := DB.Where("session_id = ?", session.SessionID).First(&stored).Error
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("session record must be deleted, got err=%v session=%#v", err, stored)
+	}
+	if logs := h.vpn.SessionLogs(session.SessionID); len(logs) != 0 {
+		t.Fatalf("session logs must be removed on delete, got %#v", logs)
+	}
+	if _, err := h.vpn.tokenForSession(session); err == nil {
+		t.Fatal("session token must be removed on delete")
+	}
+
+	var audit model.AgentVPNAuditLog
+	if err := DB.Where("action = ? AND session_id = ?", model.VPNAuditActionDeleteSession, session.SessionID).Last(&audit).Error; err != nil {
+		t.Fatalf("delete session audit must be written: %v", err)
+	}
+}
+
 func TestVPNStopSessionStillStopsWhenPolicyDeleted(t *testing.T) {
 	h := newVPNHarness(t)
 	actor := VPNActor{UserID: 100, Role: model.RoleMember}
