@@ -95,6 +95,28 @@ func cleanupVPNPolicyCore(c *gin.Context) (any, error) {
 	return nil, nil
 }
 
+func prepareVPNPolicyRules(c *gin.Context) (any, error) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if err := singleton.VPNShared.PreparePolicyRules(vpnActorFromContext(c), id); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func cleanupVPNPolicyRules(c *gin.Context) (any, error) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if err := singleton.VPNShared.CleanupPolicyRules(vpnActorFromContext(c), id); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
 func statusVPNPolicy(c *gin.Context) (*model.AgentVPNPolicyStatusCheck, error) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {

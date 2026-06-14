@@ -211,6 +211,14 @@ func (v *VPNClass) CleanupPolicyCore(actor VPNActor, policyID uint64) error {
 	return v.dispatchPolicyCoreControl(actor, policyID, model.VPNActionCleanup)
 }
 
+func (v *VPNClass) PreparePolicyRules(actor VPNActor, policyID uint64) error {
+	return v.dispatchPolicyCoreControl(actor, policyID, model.VPNActionRulesPrepare)
+}
+
+func (v *VPNClass) CleanupPolicyRules(actor VPNActor, policyID uint64) error {
+	return v.dispatchPolicyCoreControl(actor, policyID, model.VPNActionRulesCleanup)
+}
+
 func (v *VPNClass) CheckPolicyStatus(actor VPNActor, policyID uint64) (*model.AgentVPNPolicyStatusCheck, error) {
 	policy, err := v.getPolicyForActor(actor, policyID)
 	if err != nil {
