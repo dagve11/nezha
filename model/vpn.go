@@ -112,7 +112,13 @@ type VPNControlResult struct {
 	Action        string   `json:"action"`
 	Role          string   `json:"role"`
 	State         string   `json:"state"`
+	CheckID       string   `json:"check_id,omitempty"`
 	CoreVersion   string   `json:"core_version,omitempty"`
+	CoreStatus    string   `json:"core_status,omitempty"`
+	CorePath      string   `json:"core_path,omitempty"`
+	RulesStatus   string   `json:"rules_status,omitempty"`
+	RulesPath     string   `json:"rules_path,omitempty"`
+	RulesVersion  string   `json:"rules_version,omitempty"`
 	LocalHTTP     string   `json:"local_http,omitempty"`
 	LocalSOCKS    string   `json:"local_socks,omitempty"`
 	TunName       string   `json:"tun_name,omitempty"`
@@ -156,6 +162,32 @@ type AgentVPNPolicyForm struct {
 
 type AgentVPNSessionStartForm struct {
 	PolicyID uint64 `json:"policy_id"`
+}
+
+type AgentVPNPolicyStatusCheck struct {
+	PolicyID   uint64                     `json:"policy_id"`
+	PolicyName string                     `json:"policy_name"`
+	CheckID    string                     `json:"check_id"`
+	CheckedAt  time.Time                  `json:"checked_at"`
+	TimedOut   bool                       `json:"timed_out,omitempty"`
+	Nodes      []AgentVPNPolicyNodeStatus `json:"nodes"`
+}
+
+type AgentVPNPolicyNodeStatus struct {
+	Role         string   `json:"role"`
+	ServerID     uint64   `json:"server_id"`
+	ServerName   string   `json:"server_name"`
+	Online       bool     `json:"online"`
+	Responded    bool     `json:"responded"`
+	State        string   `json:"state"`
+	CoreStatus   string   `json:"core_status"`
+	CorePath     string   `json:"core_path,omitempty"`
+	CoreVersion  string   `json:"core_version,omitempty"`
+	RulesStatus  string   `json:"rules_status"`
+	RulesPath    string   `json:"rules_path,omitempty"`
+	RulesVersion string   `json:"rules_version,omitempty"`
+	LastError    string   `json:"last_error,omitempty"`
+	Logs         []string `json:"logs,omitempty"`
 }
 
 type AgentVPNPolicy struct {

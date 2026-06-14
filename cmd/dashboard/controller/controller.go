@@ -171,6 +171,7 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.POST("/batch-delete/vpn/policy", commonHandler(batchDeleteVPNPolicy))
 	auth.POST("/vpn/policy/:id/core/prepare", commonHandler(prepareVPNPolicyCore))
 	auth.POST("/vpn/policy/:id/core/cleanup", commonHandler(cleanupVPNPolicyCore))
+	auth.POST("/vpn/policy/:id/status", commonHandler(statusVPNPolicy))
 	auth.GET("/vpn/session", commonHandler(listVPNSession))
 	auth.POST("/vpn/session/start", commonHandler(startVPNSession))
 	auth.POST("/vpn/session/:id/stop", commonHandler(stopVPNSession))

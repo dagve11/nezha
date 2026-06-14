@@ -34,6 +34,7 @@ const (
 var vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
+const vpnPolicyStatusCheckTimeout = 5 * time.Second
 
 var (
 	VPNShared *VPNClass
@@ -80,6 +81,7 @@ type VPNClass struct {
 	sessionPolicies map[string]*model.AgentVPNPolicy
 	sessionLogs     map[string][]string
 	relayTraffic    map[string]vpnRelayTrafficSnapshot
+	statusWaiters   map[string]chan vpnPolicyStatusAgentResult
 
 	relayTrafficFlushInterval time.Duration
 }
@@ -89,6 +91,11 @@ type vpnRelayTrafficSnapshot struct {
 	downloadBytes     uint64
 	activeConnections uint32
 	lastFlushAt       time.Time
+}
+
+type vpnPolicyStatusAgentResult struct {
+	serverID uint64
+	result   model.VPNControlResult
 }
 
 func StartVPNLifecycleJobs() error {
@@ -118,6 +125,7 @@ func NewVPNClass() *VPNClass {
 		sessionPolicies: map[string]*model.AgentVPNPolicy{},
 		sessionLogs:     map[string][]string{},
 		relayTraffic:    map[string]vpnRelayTrafficSnapshot{},
+		statusWaiters:   map[string]chan vpnPolicyStatusAgentResult{},
 
 		relayTrafficFlushInterval: defaultVPNRelayTrafficFlushInterval,
 	}
@@ -201,6 +209,113 @@ func (v *VPNClass) PreparePolicyCore(actor VPNActor, policyID uint64) error {
 
 func (v *VPNClass) CleanupPolicyCore(actor VPNActor, policyID uint64) error {
 	return v.dispatchPolicyCoreControl(actor, policyID, model.VPNActionCleanup)
+}
+
+func (v *VPNClass) CheckPolicyStatus(actor VPNActor, policyID uint64) (*model.AgentVPNPolicyStatusCheck, error) {
+	policy, err := v.getPolicyForActor(actor, policyID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateVPNPolicyRuntime(policy); err != nil {
+		return nil, err
+	}
+	entry, err := v.getUsableServer(actor, policy.EntryServerID)
+	if err != nil {
+		return nil, err
+	}
+	exit, err := v.getUsableServer(actor, policy.ExitServerID)
+	if err != nil {
+		return nil, err
+	}
+
+	checkID, err := VPNIDGenerator("vpn_status_")
+	if err != nil {
+		return nil, err
+	}
+	expiresSeconds := policy.ExpiresSeconds
+	if expiresSeconds == 0 {
+		expiresSeconds = defaultVPNExpiresSeconds
+	}
+	session := &model.AgentVPNSession{
+		Common: model.Common{
+			ID:     policy.ID,
+			UserID: policy.GetUserID(),
+		},
+		PolicyID:      policy.ID,
+		EntryServerID: policy.EntryServerID,
+		ExitServerID:  policy.ExitServerID,
+		SessionID:     policyCoreSessionID(policy.ID),
+		Mode:          policy.Mode,
+		RelayMode:     model.VPNRelayModeDashboard,
+		ExpiresAt:     time.Now().Add(time.Duration(expiresSeconds) * time.Second),
+	}
+	status := &model.AgentVPNPolicyStatusCheck{
+		PolicyID:   policy.ID,
+		PolicyName: policy.Name,
+		CheckID:    checkID,
+		CheckedAt:  time.Now(),
+		Nodes: []model.AgentVPNPolicyNodeStatus{
+			newVPNPolicyNodeStatus(model.VPNRoleEntry, entry),
+			newVPNPolicyNodeStatus(model.VPNRoleExit, exit),
+		},
+	}
+	nodes := map[string]*model.AgentVPNPolicyNodeStatus{
+		model.VPNRoleEntry: &status.Nodes[0],
+		model.VPNRoleExit:  &status.Nodes[1],
+	}
+	waitCh := make(chan vpnPolicyStatusAgentResult, 2)
+	v.registerPolicyStatusWaiter(checkID, waitCh)
+	defer v.unregisterPolicyStatusWaiter(checkID)
+
+	pending := map[string]struct{}{}
+	dispatchStatus := func(role string, server *model.Server) {
+		node := nodes[role]
+		if server == nil {
+			node.LastError = fmt.Sprintf("%s server not found", role)
+			return
+		}
+		if server.GetTaskStream() == nil {
+			node.LastError = fmt.Sprintf("%s server %d is offline", role, server.ID)
+			return
+		}
+		pending[role] = struct{}{}
+		if err := v.sendPolicyStatusControl(server, session, policy, role, checkID); err != nil {
+			delete(pending, role)
+			node.LastError = err.Error()
+		}
+	}
+	dispatchStatus(model.VPNRoleEntry, entry)
+	dispatchStatus(model.VPNRoleExit, exit)
+	if len(pending) == 0 {
+		return status, nil
+	}
+
+	timer := time.NewTimer(vpnPolicyStatusCheckTimeout)
+	defer timer.Stop()
+	for len(pending) > 0 {
+		select {
+		case agentResult := <-waitCh:
+			role := agentResult.result.Role
+			node := nodes[role]
+			if node == nil || node.ServerID != agentResult.serverID {
+				continue
+			}
+			if _, ok := pending[role]; !ok {
+				continue
+			}
+			updateVPNPolicyNodeStatus(node, agentResult.result)
+			delete(pending, role)
+		case <-timer.C:
+			status.TimedOut = true
+			for role := range pending {
+				if node := nodes[role]; node != nil {
+					node.LastError = "agent status check timed out"
+				}
+			}
+			return status, nil
+		}
+	}
+	return status, nil
 }
 
 func (v *VPNClass) dispatchPolicyCoreControl(actor VPNActor, policyID uint64, action string) error {
@@ -379,6 +494,7 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPNControlResult) (*model.AgentVPNSession, error) {
 	var session model.AgentVPNSession
 	sessionID := strings.TrimSpace(result.SessionID)
+	v.deliverPolicyStatusResult(reporterServerID, result)
 	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
 		if isPolicyCoreSessionID(sessionID) {
 			return nil, nil
@@ -1201,6 +1317,30 @@ func (v *VPNClass) sendControl(server *model.Server, session *model.AgentVPNSess
 	return nil
 }
 
+func (v *VPNClass) sendPolicyStatusControl(server *model.Server, session *model.AgentVPNSession, policy *model.AgentVPNPolicy, role string, checkID string) error {
+	if server == nil {
+		return errors.New("server not found")
+	}
+	stream := server.GetTaskStream()
+	if stream == nil {
+		return fmt.Errorf("server %d is offline", server.ID)
+	}
+	req := buildVPNControlRequest(session, policy, role, model.VPNActionStatus, "")
+	setVPNRequestExtra(&req, "status_check_id", checkID)
+	data, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&pb.Task{
+		Id:   session.ID,
+		Type: model.TaskTypeVPNControl,
+		Data: string(data),
+	}); err != nil {
+		return fmt.Errorf("send status request to %s agent server=%d name=%q: %w", role, server.ID, server.Name, err)
+	}
+	return nil
+}
+
 func (v *VPNClass) querySessionStatus(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, serverID uint64, role string) error {
 	if err := validateVPNPolicyRuntime(policy); err != nil {
 		return err
@@ -1210,6 +1350,77 @@ func (v *VPNClass) querySessionStatus(session *model.AgentVPNSession, policy *mo
 		return fmt.Errorf("server %d is offline", serverID)
 	}
 	return v.sendControl(server, session, policy, role, model.VPNActionStatus, "")
+}
+
+func newVPNPolicyNodeStatus(role string, server *model.Server) model.AgentVPNPolicyNodeStatus {
+	node := model.AgentVPNPolicyNodeStatus{
+		Role:        role,
+		State:       model.VPNStateUnknown,
+		CoreStatus:  "unknown",
+		RulesStatus: "unknown",
+	}
+	if server == nil {
+		return node
+	}
+	node.ServerID = server.ID
+	node.ServerName = server.Name
+	node.Online = server.GetTaskStream() != nil
+	return node
+}
+
+func updateVPNPolicyNodeStatus(node *model.AgentVPNPolicyNodeStatus, result model.VPNControlResult) {
+	if node == nil {
+		return
+	}
+	node.Responded = true
+	node.State = firstNonEmptyString(result.State, node.State, model.VPNStateUnknown)
+	node.CoreStatus = firstNonEmptyString(result.CoreStatus, node.CoreStatus, "unknown")
+	node.CorePath = firstNonEmptyString(result.CorePath, node.CorePath)
+	node.CoreVersion = firstNonEmptyString(result.CoreVersion, node.CoreVersion)
+	node.RulesStatus = firstNonEmptyString(result.RulesStatus, node.RulesStatus, "unknown")
+	node.RulesPath = firstNonEmptyString(result.RulesPath, node.RulesPath)
+	node.RulesVersion = firstNonEmptyString(result.RulesVersion, node.RulesVersion)
+	node.LastError = firstNonEmptyString(result.LastError, node.LastError)
+	if len(result.Logs) > 0 {
+		node.Logs = append([]string{}, result.Logs...)
+	}
+}
+
+func (v *VPNClass) registerPolicyStatusWaiter(checkID string, ch chan vpnPolicyStatusAgentResult) {
+	checkID = strings.TrimSpace(checkID)
+	if checkID == "" || ch == nil {
+		return
+	}
+	v.mu.Lock()
+	v.statusWaiters[checkID] = ch
+	v.mu.Unlock()
+}
+
+func (v *VPNClass) unregisterPolicyStatusWaiter(checkID string) {
+	checkID = strings.TrimSpace(checkID)
+	if checkID == "" {
+		return
+	}
+	v.mu.Lock()
+	delete(v.statusWaiters, checkID)
+	v.mu.Unlock()
+}
+
+func (v *VPNClass) deliverPolicyStatusResult(reporterServerID uint64, result model.VPNControlResult) {
+	checkID := strings.TrimSpace(result.CheckID)
+	if checkID == "" {
+		return
+	}
+	v.mu.Lock()
+	ch := v.statusWaiters[checkID]
+	v.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- vpnPolicyStatusAgentResult{serverID: reporterServerID, result: result}:
+	default:
+	}
 }
 
 func (v *VPNClass) restartExistingSession(session *model.AgentVPNSession, policy *model.AgentVPNPolicy) error {
