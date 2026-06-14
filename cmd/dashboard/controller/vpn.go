@@ -164,6 +164,15 @@ func statusVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	return singleton.VPNShared.RefreshSessionStatus(vpnActorFromContext(c), sessionID)
 }
 
+func controlVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
+	sessionID := strings.TrimSpace(c.Param("id"))
+	var form model.AgentVPNSessionControlForm
+	if err := c.ShouldBindJSON(&form); err != nil {
+		return nil, err
+	}
+	return singleton.VPNShared.ControlSession(vpnActorFromContext(c), sessionID, form)
+}
+
 func vpnSessionStream(c *gin.Context) (any, error) {
 	sessionID := strings.TrimSpace(c.Param("id"))
 	session, err := getPermittedVPNSession(c, sessionID)

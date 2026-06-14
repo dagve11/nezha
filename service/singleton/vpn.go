@@ -433,23 +433,25 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 		Common: model.Common{
 			UserID: actor.UserID,
 		},
-		PolicyID:      policy.ID,
-		EntryServerID: policy.EntryServerID,
-		ExitServerID:  policy.ExitServerID,
-		SessionID:     sessionID,
-		TokenHash:     hashVPNToken(token),
-		Mode:          policy.Mode,
-		RelayMode:     model.VPNRelayModeDashboard,
-		State:         model.VPNStateStarting,
-		EntryState:    model.VPNStateStarting,
-		ExitState:     model.VPNStateStarting,
-		EntryStreamID: entryStreamID,
-		ExitStreamID:  exitStreamID,
-		LocalHTTP:     policy.ListenHTTP,
-		LocalSOCKS:    policy.ListenSOCKS,
-		TunName:       policy.TunName,
-		StartedAt:     now,
-		ExpiresAt:     now.Add(time.Duration(policy.ExpiresSeconds) * time.Second),
+		PolicyID:       policy.ID,
+		EntryServerID:  policy.EntryServerID,
+		ExitServerID:   policy.ExitServerID,
+		SessionID:      sessionID,
+		TokenHash:      hashVPNToken(token),
+		Mode:           policy.Mode,
+		RuleMode:       normalizeVPNRuleMode(policy.RuleMode),
+		RelayMode:      model.VPNRelayModeDashboard,
+		State:          model.VPNStateStarting,
+		EntryState:     model.VPNStateStarting,
+		ExitState:      model.VPNStateStarting,
+		EntryStreamID:  entryStreamID,
+		ExitStreamID:   exitStreamID,
+		LocalHTTP:      policy.ListenHTTP,
+		LocalSOCKS:     policy.ListenSOCKS,
+		TunName:        policy.TunName,
+		SetSystemProxy: policy.SetSystemProxy,
+		StartedAt:      now,
+		ExpiresAt:      now.Add(time.Duration(policy.ExpiresSeconds) * time.Second),
 	}
 	if err := DB.Create(session).Error; err != nil {
 		return nil, err
@@ -835,6 +837,75 @@ func (v *VPNClass) RestartSession(actor VPNActor, sessionID string) (*model.Agen
 	if err := v.restartExistingSessionWithAction(actor, &session, policy, model.VPNActionRestart); err != nil {
 		return &session, err
 	}
+	return &session, nil
+}
+
+func (v *VPNClass) ControlSession(actor VPNActor, sessionID string, form model.AgentVPNSessionControlForm) (*model.AgentVPNSession, error) {
+	var session model.AgentVPNSession
+	if err := DB.Where("session_id = ?", strings.TrimSpace(sessionID)).First(&session).Error; err != nil {
+		return nil, err
+	}
+	if !actorCanUseVPNSession(actor, &session) {
+		return nil, errors.New("permission denied")
+	}
+	policy, err := v.policyForSession(&session)
+	if err != nil {
+		policy = v.fallbackVPNPolicyForLostSession(&session)
+	}
+	policy = cloneVPNPolicy(policy)
+	if err := validateVPNMode(form.Mode); err != nil {
+		return &session, err
+	}
+	if err := validateVPNRuleMode(form.RuleMode); err != nil {
+		return &session, err
+	}
+	if strings.TrimSpace(form.Mode) != "" {
+		policy.Mode = normalizeVPNMode(form.Mode)
+	}
+	if strings.TrimSpace(form.RuleMode) != "" {
+		policy.RuleMode = normalizeVPNRuleMode(form.RuleMode)
+	}
+	policy.SetSystemProxy = policy.Mode == model.VPNModeSystemProxy && form.SetSystemProxy
+	if err := validateVPNPolicyRuntime(policy); err != nil {
+		return &session, err
+	}
+	entry, err := v.getUsableServer(actor, session.EntryServerID)
+	if err != nil {
+		return &session, err
+	}
+	exit, err := v.getUsableServer(actor, session.ExitServerID)
+	if err != nil {
+		return &session, err
+	}
+	if err := validateVPNServerCapabilities(policy, entry, exit); err != nil {
+		return &session, err
+	}
+
+	session.Mode = policy.Mode
+	session.RuleMode = normalizeVPNRuleMode(policy.RuleMode)
+	session.SetSystemProxy = policy.SetSystemProxy
+	session.LocalHTTP = policy.ListenHTTP
+	session.LocalSOCKS = policy.ListenSOCKS
+	session.TunName = policy.TunName
+	session.LastError = ""
+	if err := DB.Save(&session).Error; err != nil {
+		return nil, err
+	}
+	v.appendControlLog(session.SessionID, "session controls updated mode=%s rule_mode=%s set_system_proxy=%t", session.Mode, session.RuleMode, session.SetSystemProxy)
+	v.mu.Lock()
+	v.sessionPolicies[session.SessionID] = cloneVPNPolicy(policy)
+	v.mu.Unlock()
+
+	detail := vpnSessionControlAuditDetail(policy)
+	if isVPNTerminalState(session.State) {
+		_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session controls saved", detail)
+		return &session, nil
+	}
+	if err := v.restartExistingSessionWithAction(actor, &session, policy, model.VPNActionRestart); err != nil {
+		_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, false, err.Error(), detail)
+		return &session, err
+	}
+	_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session controls applied", detail)
 	return &session, nil
 }
 
@@ -1477,6 +1548,7 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	now := time.Now()
 	session.TokenHash = hashVPNToken(token)
 	session.Mode = policy.Mode
+	session.RuleMode = normalizeVPNRuleMode(policy.RuleMode)
 	session.RelayMode = model.VPNRelayModeDashboard
 	session.State = model.VPNStateStarting
 	session.EntryState = model.VPNStatePending
@@ -1486,6 +1558,7 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	session.LocalHTTP = policy.ListenHTTP
 	session.LocalSOCKS = policy.ListenSOCKS
 	session.TunName = policy.TunName
+	session.SetSystemProxy = policy.SetSystemProxy
 	session.LastError = ""
 	session.StoppedAt = nil
 	session.StartedAt = now
@@ -1689,7 +1762,7 @@ func (v *VPNClass) policyForSession(session *model.AgentVPNSession) (*model.Agen
 	v.mu.Lock()
 	if policy := v.sessionPolicies[session.SessionID]; policy != nil {
 		v.mu.Unlock()
-		return cloneVPNPolicy(policy), nil
+		return applyVPNSessionControls(cloneVPNPolicy(policy), session), nil
 	}
 	v.mu.Unlock()
 	var policy model.AgentVPNPolicy
@@ -1699,7 +1772,7 @@ func (v *VPNClass) policyForSession(session *model.AgentVPNSession) (*model.Agen
 	v.mu.Lock()
 	v.sessionPolicies[session.SessionID] = cloneVPNPolicy(&policy)
 	v.mu.Unlock()
-	return &policy, nil
+	return applyVPNSessionControls(&policy, session), nil
 }
 
 func (v *VPNClass) tokenForSession(session *model.AgentVPNSession) (string, error) {
@@ -1759,6 +1832,17 @@ func vpnPolicyAuditDetail(policy *model.AgentVPNPolicy) map[string]string {
 		"core_version":               policy.CoreVersion,
 		"core_download_url":          policy.CoreDownloadURL,
 		"core_sha256":                policy.CoreSHA256,
+	}
+}
+
+func vpnSessionControlAuditDetail(policy *model.AgentVPNPolicy) map[string]string {
+	if policy == nil {
+		return nil
+	}
+	return map[string]string{
+		"mode":             policy.Mode,
+		"rule_mode":        policy.RuleMode,
+		"set_system_proxy": fmt.Sprint(policy.SetSystemProxy),
 	}
 }
 
@@ -2268,10 +2352,15 @@ func fallbackVPNPolicyForSession(session *model.AgentVPNSession) *model.AgentVPN
 		return nil
 	}
 	return &model.AgentVPNPolicy{
-		Name:          fmt.Sprintf("session %s", session.SessionID),
-		EntryServerID: session.EntryServerID,
-		ExitServerID:  session.ExitServerID,
-		Mode:          session.Mode,
+		Name:           fmt.Sprintf("session %s", session.SessionID),
+		EntryServerID:  session.EntryServerID,
+		ExitServerID:   session.ExitServerID,
+		Mode:           session.Mode,
+		RuleMode:       session.RuleMode,
+		ListenHTTP:     session.LocalHTTP,
+		ListenSOCKS:    session.LocalSOCKS,
+		TunName:        session.TunName,
+		SetSystemProxy: session.SetSystemProxy,
 	}
 }
 
@@ -2287,6 +2376,7 @@ func (v *VPNClass) fallbackVPNPolicyForLostSession(session *model.AgentVPNSessio
 			model.VPNAuditActionRestart,
 			model.VPNAuditActionStopSession,
 			model.VPNAuditActionStatus,
+			model.VPNAuditActionControl,
 		}).
 		Order("id DESC").
 		First(&sessionAudit).Error; err == nil {
@@ -2311,7 +2401,7 @@ func (v *VPNClass) fallbackVPNPolicyForLostSession(session *model.AgentVPNSessio
 		}
 	}
 
-	return policy
+	return applyVPNSessionControls(policy, session)
 }
 
 func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]string) {
@@ -2490,6 +2580,8 @@ func normalizeVPNRuleMode(mode string) string {
 		return model.VPNRuleModeDomain
 	case model.VPNRuleModeIP:
 		return model.VPNRuleModeIP
+	case model.VPNRuleModeDirect:
+		return model.VPNRuleModeDirect
 	default:
 		return model.VPNRuleModeGlobal
 	}
@@ -2497,7 +2589,7 @@ func normalizeVPNRuleMode(mode string) string {
 
 func validateVPNRuleMode(mode string) error {
 	switch strings.TrimSpace(mode) {
-	case "", model.VPNRuleModeGlobal, model.VPNRuleModeDomain, model.VPNRuleModeIP:
+	case "", model.VPNRuleModeGlobal, model.VPNRuleModeDomain, model.VPNRuleModeIP, model.VPNRuleModeDirect:
 		return nil
 	default:
 		return fmt.Errorf("unsupported vpn rule mode %q", mode)
@@ -2939,4 +3031,27 @@ func cloneVPNPolicy(policy *model.AgentVPNPolicy) *model.AgentVPNPolicy {
 	clone.CIDRs = append([]string(nil), policy.CIDRs...)
 	clone.DirectCIDRs = append([]string(nil), policy.DirectCIDRs...)
 	return &clone
+}
+
+func applyVPNSessionControls(policy *model.AgentVPNPolicy, session *model.AgentVPNSession) *model.AgentVPNPolicy {
+	if policy == nil || session == nil {
+		return policy
+	}
+	if strings.TrimSpace(session.Mode) != "" {
+		policy.Mode = normalizeVPNMode(session.Mode)
+	}
+	if strings.TrimSpace(session.RuleMode) != "" {
+		policy.RuleMode = normalizeVPNRuleMode(session.RuleMode)
+		policy.SetSystemProxy = session.SetSystemProxy
+	}
+	if strings.TrimSpace(session.LocalHTTP) != "" {
+		policy.ListenHTTP = session.LocalHTTP
+	}
+	if strings.TrimSpace(session.LocalSOCKS) != "" {
+		policy.ListenSOCKS = session.LocalSOCKS
+	}
+	if strings.TrimSpace(session.TunName) != "" {
+		policy.TunName = session.TunName
+	}
+	return policy
 }

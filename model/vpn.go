@@ -39,6 +39,7 @@ const (
 	VPNRuleModeGlobal = "global"
 	VPNRuleModeDomain = "domain"
 	VPNRuleModeIP     = "ip"
+	VPNRuleModeDirect = "direct"
 )
 
 const (
@@ -61,6 +62,7 @@ const (
 	VPNAuditActionDeleteSession = "delete_session"
 	VPNAuditActionRestart       = "restart_session"
 	VPNAuditActionStatus        = "status_session"
+	VPNAuditActionControl       = "control_session"
 )
 
 type VPNControlRequest struct {
@@ -166,6 +168,12 @@ type AgentVPNSessionStartForm struct {
 	PolicyID uint64 `json:"policy_id"`
 }
 
+type AgentVPNSessionControlForm struct {
+	Mode           string `json:"mode"`
+	RuleMode       string `json:"rule_mode"`
+	SetSystemProxy bool   `json:"set_system_proxy"`
+}
+
 type AgentVPNPolicyStatusCheck struct {
 	PolicyID   uint64                     `json:"policy_id"`
 	PolicyName string                     `json:"policy_name"`
@@ -249,6 +257,7 @@ type AgentVPNSession struct {
 	SessionID         string     `json:"session_id" gorm:"uniqueIndex"`
 	TokenHash         string     `json:"-" gorm:"type:char(71)"`
 	Mode              string     `json:"mode"`
+	RuleMode          string     `json:"rule_mode"`
 	RelayMode         string     `json:"relay_mode"`
 	State             string     `json:"state" gorm:"index"`
 	EntryState        string     `json:"entry_state"`
@@ -258,6 +267,7 @@ type AgentVPNSession struct {
 	LocalHTTP         string     `json:"local_http"`
 	LocalSOCKS        string     `json:"local_socks"`
 	TunName           string     `json:"tun_name"`
+	SetSystemProxy    bool       `json:"set_system_proxy"`
 	UploadBytes       uint64     `json:"upload_bytes"`
 	DownloadBytes     uint64     `json:"download_bytes"`
 	ActiveConnections uint32     `json:"active_connections"`
