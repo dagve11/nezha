@@ -24,11 +24,9 @@ import (
 )
 
 const (
-	defaultVPNExpiresSeconds        = 3600
-	defaultVPNCoreDownloadBaseURL   = "https://github.com/dagve11/sb-core/releases/download/V1.0.0"
-	defaultVPNCoreCNDownloadBaseURL = "https://gitee.com/AGZZY11/sb-core/releases/download/V1.0.0"
-	defaultVPNCoreManifestURL       = defaultVPNCoreDownloadBaseURL + "/manifest.json"
-	defaultVPNCoreCNManifestURL     = defaultVPNCoreCNDownloadBaseURL + "/manifest.json"
+	defaultVPNExpiresSeconds      = 3600
+	defaultVPNCoreDownloadBaseURL = "https://github.com/dagve11/sb-core/releases/download/V1.0.0"
+	defaultVPNCoreManifestURL     = defaultVPNCoreDownloadBaseURL + "/manifest.json"
 )
 
 var vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
@@ -2908,9 +2906,7 @@ func buildVPNCoreSpec(policy *model.AgentVPNPolicy) model.VPNCoreSpec {
 		return spec
 	}
 	spec.DownloadBaseURL = defaultVPNCoreDownloadBaseURL
-	spec.CNDownloadBaseURL = defaultVPNCoreCNDownloadBaseURL
 	spec.ManifestURL = defaultVPNCoreManifestURL
-	spec.CNManifestURL = defaultVPNCoreCNManifestURL
 	return spec
 }
 
