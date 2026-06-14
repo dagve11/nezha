@@ -366,13 +366,6 @@ func (v *VPNClass) dispatchPolicyCoreControl(actor VPNActor, policyID uint64, ac
 		RelayMode:     model.VPNRelayModeDashboard,
 		ExpiresAt:     time.Now().Add(time.Duration(expiresSeconds) * time.Second),
 	}
-	log.Printf("NEZHA>> VPN policy asset dispatch: policy=%d session=%s action=%s entry=%d exit=%d",
-		policy.ID,
-		session.SessionID,
-		action,
-		policy.EntryServerID,
-		policy.ExitServerID,
-	)
 	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, action, ""); err != nil {
 		return err
 	}
@@ -512,19 +505,10 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 	var session model.AgentVPNSession
 	sessionID := strings.TrimSpace(result.SessionID)
 	v.deliverPolicyStatusResult(reporterServerID, result)
-	if isPolicyCoreSessionID(sessionID) {
-		log.Printf("NEZHA>> VPN policy asset result: server=%d session=%s role=%s action=%s state=%s%s logs=%s",
-			reporterServerID,
-			sessionID,
-			result.Role,
-			result.Action,
-			result.State,
-			vpnControlResultDetail(result),
-			strings.Join(result.Logs, " | "),
-		)
-		return nil, nil
-	}
 	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
+		if isPolicyCoreSessionID(sessionID) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if !reporterMatchesVPNRole(reporterServerID, result.Role, &session) {
