@@ -884,6 +884,7 @@ func (v *VPNClass) ControlSession(actor VPNActor, sessionID string, form model.A
 	session.Mode = policy.Mode
 	session.RuleMode = normalizeVPNRuleMode(policy.RuleMode)
 	session.SetSystemProxy = policy.SetSystemProxy
+	session.ControlOverride = true
 	session.LocalHTTP = policy.ListenHTTP
 	session.LocalSOCKS = policy.ListenSOCKS
 	session.TunName = policy.TunName
@@ -2401,7 +2402,10 @@ func (v *VPNClass) fallbackVPNPolicyForLostSession(session *model.AgentVPNSessio
 		}
 	}
 
-	return applyVPNSessionControls(policy, session)
+	if session.ControlOverride {
+		return applyVPNSessionControls(policy, session)
+	}
+	return policy
 }
 
 func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]string) {
@@ -3035,6 +3039,9 @@ func cloneVPNPolicy(policy *model.AgentVPNPolicy) *model.AgentVPNPolicy {
 
 func applyVPNSessionControls(policy *model.AgentVPNPolicy, session *model.AgentVPNSession) *model.AgentVPNPolicy {
 	if policy == nil || session == nil {
+		return policy
+	}
+	if !session.ControlOverride {
 		return policy
 	}
 	if strings.TrimSpace(session.Mode) != "" {

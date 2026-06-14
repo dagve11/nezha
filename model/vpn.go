@@ -268,6 +268,7 @@ type AgentVPNSession struct {
 	LocalSOCKS        string     `json:"local_socks"`
 	TunName           string     `json:"tun_name"`
 	SetSystemProxy    bool       `json:"set_system_proxy"`
+	ControlOverride   bool       `json:"control_override"`
 	UploadBytes       uint64     `json:"upload_bytes"`
 	DownloadBytes     uint64     `json:"download_bytes"`
 	ActiveConnections uint32     `json:"active_connections"`
