@@ -12,6 +12,7 @@ const (
 	VPNActionStart        = "start"
 	VPNActionStop         = "stop"
 	VPNActionRestart      = "restart"
+	VPNActionControl      = "control"
 	VPNActionStatus       = "status"
 	VPNActionLogs         = "logs"
 	VPNActionCleanup      = "cleanup"

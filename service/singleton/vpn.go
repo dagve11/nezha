@@ -531,6 +531,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		v.recordLateAgentCleanupResult(policy, &session, result)
 		return &session, nil
 	}
+	if result.Action == model.VPNActionControl {
+		return v.handleRuntimeControlResult(policy, &session, result)
+	}
 
 	wasRunning := session.State == model.VPNStateRunning
 	updateSessionFromVPNResult(&session, result)
@@ -880,6 +883,9 @@ func (v *VPNClass) ControlSession(actor VPNActor, sessionID string, form model.A
 	if err := validateVPNServerCapabilities(policy, entry, exit); err != nil {
 		return &session, err
 	}
+	if session.State == model.VPNStateRunning && !vpnRuntimeModesCompatible(session.Mode, policy.Mode) {
+		return &session, fmt.Errorf("changing VPN runtime from %s to %s requires restarting the session", normalizeVPNMode(session.Mode), normalizeVPNMode(policy.Mode))
+	}
 
 	session.Mode = policy.Mode
 	session.RuleMode = normalizeVPNRuleMode(policy.RuleMode)
@@ -902,12 +908,62 @@ func (v *VPNClass) ControlSession(actor VPNActor, sessionID string, form model.A
 		_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session controls saved", detail)
 		return &session, nil
 	}
-	if err := v.restartExistingSessionWithAction(actor, &session, policy, model.VPNActionRestart); err != nil {
+	if session.State != model.VPNStateRunning {
+		_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session controls saved", detail)
+		return &session, nil
+	}
+	if err := v.applyRunningSessionControls(&session, policy); err != nil {
 		_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, false, err.Error(), detail)
 		return &session, err
 	}
-	_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session controls applied", detail)
+	_ = v.writeAudit(actor, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session controls dispatched", detail)
 	return &session, nil
+}
+
+func (v *VPNClass) applyRunningSessionControls(session *model.AgentVPNSession, policy *model.AgentVPNPolicy) error {
+	if session == nil || policy == nil {
+		return errors.New("vpn session and policy are required")
+	}
+	entry, ok := ServerShared.Get(session.EntryServerID)
+	if !ok || entry == nil || entry.GetTaskStream() == nil {
+		return fmt.Errorf("entry server %d is offline", session.EntryServerID)
+	}
+	v.appendControlLog(session.SessionID, "applying runtime controls without restarting session")
+	return v.sendControl(entry, session, policy, model.VPNRoleEntry, model.VPNActionControl, "")
+}
+
+func (v *VPNClass) handleRuntimeControlResult(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, result model.VPNControlResult) (*model.AgentVPNSession, error) {
+	if session == nil {
+		return nil, errors.New("vpn session is required")
+	}
+	detail := vpnSessionControlAuditDetail(policy)
+	if detail == nil {
+		detail = map[string]string{}
+	}
+	detail["role"] = result.Role
+	detail["result_action"] = result.Action
+	if result.State == model.VPNStateFailed {
+		session.LastError = firstNonEmptyString(result.LastError, "runtime control failed")
+		v.appendControlLog(session.SessionID, "session controls failed by %s agent: %s", result.Role, session.LastError)
+		if err := DB.Save(session).Error; err != nil {
+			return nil, err
+		}
+		_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, detail)
+		return session, nil
+	}
+	if result.State != "" {
+		updateSessionFromVPNResult(session, result)
+	}
+	if session.State != model.VPNStateRunning {
+		session.State = model.VPNStateRunning
+	}
+	session.LastError = ""
+	v.appendControlLog(session.SessionID, "session controls applied by %s agent", result.Role)
+	if err := DB.Save(session).Error; err != nil {
+		return nil, err
+	}
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionControl, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session controls applied", detail)
+	return session, nil
 }
 
 func (v *VPNClass) RefreshSessionStatus(actor VPNActor, sessionID string) (*model.AgentVPNSession, error) {
@@ -1998,7 +2054,7 @@ func canHandleVPNResultWithoutPolicy(result model.VPNControlResult) bool {
 	if result.State == model.VPNStateFailed || result.State == model.VPNStateStopped {
 		return true
 	}
-	if result.Action == model.VPNActionLogs || result.Action == model.VPNActionCleanup || result.Action == model.VPNActionStatus {
+	if result.Action == model.VPNActionLogs || result.Action == model.VPNActionCleanup || result.Action == model.VPNActionStatus || result.Action == model.VPNActionControl {
 		return true
 	}
 	if result.Action == model.VPNActionPrepare && result.State == model.VPNStatePrepared {
@@ -2215,8 +2271,8 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 	if role == model.VPNRoleEntry && isVPNTunMode(policy.Mode) {
 		req.DNSServer = strings.TrimSpace(policy.DNSServer)
 	}
-	if role == model.VPNRoleEntry && policy.SetSystemProxy {
-		setVPNRequestExtra(&req, "set_system_proxy", "true")
+	if role == model.VPNRoleEntry {
+		setVPNRequestExtra(&req, "set_system_proxy", fmt.Sprint(policy.SetSystemProxy))
 	}
 	if role == model.VPNRoleEntry && isVPNTunMode(policy.Mode) && strings.TrimSpace(policy.TunHealthURL) != "" {
 		setVPNRequestExtra(&req, "tun_health_url", strings.TrimSpace(policy.TunHealthURL))
@@ -2598,6 +2654,17 @@ func validateVPNRuleMode(mode string) error {
 	default:
 		return fmt.Errorf("unsupported vpn rule mode %q", mode)
 	}
+}
+
+func vpnRuntimeModesCompatible(current string, next string) bool {
+	return vpnRuntimeModeFamily(current) == vpnRuntimeModeFamily(next)
+}
+
+func vpnRuntimeModeFamily(mode string) string {
+	if isVPNTunMode(normalizeVPNMode(mode)) {
+		return "tun"
+	}
+	return model.VPNModeSystemProxy
 }
 
 func normalizeVPNExpires(seconds uint32) uint32 {
