@@ -815,6 +815,17 @@ func (v *VPNClass) DeleteSession(actor VPNActor, sessionID string) error {
 		if stopped != nil {
 			session = *stopped
 		}
+	} else {
+		policy, err := v.policyForSession(&session)
+		if err != nil {
+			policy = v.fallbackVPNPolicyForLostSession(&session)
+		}
+		cleanupErrors := v.dispatchSessionCleanupStops(&session, policy)
+		if len(cleanupErrors) > 0 {
+			v.appendControlLog(session.SessionID, "delete cleanup stop completed with dispatch errors: %s", strings.Join(cleanupErrors, "; "))
+		} else {
+			v.appendControlLog(session.SessionID, "delete cleanup stop dispatched for stopped session")
+		}
 	}
 
 	v.forgetVPNSessionRuntime(sessionID)
