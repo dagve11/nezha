@@ -34,6 +34,7 @@ const (
 const (
 	VPNRelayModeDashboard = "dashboard"
 	VPNRelayModeDirect    = "direct"
+	VPNRelayModeAuto      = "auto"
 )
 
 const (
@@ -165,6 +166,7 @@ type AgentVPNPolicyForm struct {
 	ExitServerID            uint64   `json:"exit_server_id"`
 	Mode                    string   `json:"mode"`
 	RuleMode                string   `json:"rule_mode"`
+	RelayMode               string   `json:"relay_mode"`
 	Domains                 []string `json:"domains"`
 	CIDRs                   []string `json:"cidrs"`
 	DirectCIDRs             []string `json:"direct_cidrs"`
@@ -231,6 +233,7 @@ type AgentVPNPolicy struct {
 	ExitServerID            uint64   `json:"exit_server_id" gorm:"index"`
 	Mode                    string   `json:"mode" gorm:"index"`
 	RuleMode                string   `json:"rule_mode"`
+	RelayMode               string   `json:"relay_mode"`
 	Domains                 []string `json:"domains" gorm:"-"`
 	CIDRs                   []string `json:"cidrs" gorm:"-"`
 	DirectCIDRs             []string `json:"direct_cidrs" gorm:"-"`

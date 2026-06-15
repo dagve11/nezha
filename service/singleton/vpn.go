@@ -1291,7 +1291,7 @@ func (v *VPNClass) startPreparedVPNSession(session *model.AgentVPNSession, polic
 		return v.failPreparedVPNStart(session, policy, action, "exit_token_missing_after_core_prepared", err)
 	}
 
-	session.RelayMode = v.preferredVPNRelayMode(session)
+	session.RelayMode = v.preferredVPNRelayMode(session, policy)
 	if session.RelayMode == model.VPNRelayModeDashboard && VPNRelayCreator != nil {
 		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
 		v.appendControlLog(session.SessionID, "relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
@@ -1822,7 +1822,7 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	session.TokenHash = hashVPNToken(token)
 	session.Mode = policy.Mode
 	session.RuleMode = normalizeVPNRuleMode(policy.RuleMode)
-	session.RelayMode = v.preferredVPNRelayMode(session)
+	session.RelayMode = v.preferredVPNRelayMode(session, policy)
 	session.State = model.VPNStateStarting
 	session.EntryState = model.VPNStatePending
 	session.ExitState = model.VPNStateStarting
@@ -1968,6 +1968,9 @@ func (v *VPNClass) validatePolicyForm(actor VPNActor, form model.AgentVPNPolicyF
 	if err := validateVPNRuleMode(form.RuleMode); err != nil {
 		return err
 	}
+	if err := validateVPNRelayPreference(form.RelayMode); err != nil {
+		return err
+	}
 	mode := normalizeVPNMode(form.Mode)
 	if mode == model.VPNModeSystemProxy && strings.TrimSpace(form.ListenHTTP) == "" && strings.TrimSpace(form.ListenSOCKS) == "" {
 		return errors.New("system proxy mode requires http or socks listen address")
@@ -2088,6 +2091,7 @@ func vpnPolicyAuditDetail(policy *model.AgentVPNPolicy) map[string]string {
 		"policy_name":                policy.Name,
 		"mode":                       policy.Mode,
 		"rule_mode":                  policy.RuleMode,
+		"relay_mode":                 policy.RelayMode,
 		"domains":                    strings.Join(policy.Domains, ","),
 		"cidrs":                      strings.Join(policy.CIDRs, ","),
 		"direct_cidrs":               strings.Join(policy.DirectCIDRs, ","),
@@ -2707,6 +2711,7 @@ func fallbackVPNPolicyForSession(session *model.AgentVPNSession) *model.AgentVPN
 		ExitServerID:   session.ExitServerID,
 		Mode:           session.Mode,
 		RuleMode:       session.RuleMode,
+		RelayMode:      session.RelayMode,
 		ListenHTTP:     session.LocalHTTP,
 		ListenSOCKS:    session.LocalSOCKS,
 		TunName:        session.TunName,
@@ -2769,6 +2774,9 @@ func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]s
 	}
 	if value := strings.TrimSpace(detail["rule_mode"]); value != "" {
 		policy.RuleMode = value
+	}
+	if value := strings.TrimSpace(detail["relay_mode"]); value != "" {
+		policy.RelayMode = normalizeVPNRelayPreference(value)
 	}
 	if value := strings.TrimSpace(detail["domains"]); value != "" {
 		policy.Domains = normalizeVPNStringList(strings.Split(value, ","))
@@ -2859,6 +2867,9 @@ func validateVPNPolicyRuntime(policy *model.AgentVPNPolicy) error {
 	if err := validateVPNRuleMode(policy.RuleMode); err != nil {
 		return err
 	}
+	if err := validateVPNRelayPreference(policy.RelayMode); err != nil {
+		return err
+	}
 	mode := normalizeVPNMode(policy.Mode)
 	ruleMode := normalizeVPNRuleMode(policy.RuleMode)
 	if mode == model.VPNModeSystemProxy && strings.TrimSpace(policy.ListenHTTP) == "" && strings.TrimSpace(policy.ListenSOCKS) == "" {
@@ -2926,6 +2937,26 @@ func normalizeVPNRelayMode(relayMode string) string {
 		return model.VPNRelayModeDashboard
 	default:
 		return model.VPNRelayModeDashboard
+	}
+}
+
+func normalizeVPNRelayPreference(relayMode string) string {
+	switch strings.TrimSpace(relayMode) {
+	case model.VPNRelayModeDirect:
+		return model.VPNRelayModeDirect
+	case model.VPNRelayModeDashboard:
+		return model.VPNRelayModeDashboard
+	default:
+		return model.VPNRelayModeAuto
+	}
+}
+
+func validateVPNRelayPreference(relayMode string) error {
+	switch strings.TrimSpace(relayMode) {
+	case "", model.VPNRelayModeAuto, model.VPNRelayModeDirect, model.VPNRelayModeDashboard:
+		return nil
+	default:
+		return fmt.Errorf("unsupported vpn relay mode %q", relayMode)
 	}
 }
 
@@ -3153,6 +3184,7 @@ func vpnPolicyFromForm(userID uint64, form model.AgentVPNPolicyForm) *model.Agen
 		ExitServerID:            form.ExitServerID,
 		Mode:                    normalizeVPNMode(form.Mode),
 		RuleMode:                normalizeVPNRuleMode(form.RuleMode),
+		RelayMode:               normalizeVPNRelayPreference(form.RelayMode),
 		Domains:                 normalizeVPNStringList(form.Domains),
 		CIDRs:                   normalizeVPNStringList(form.CIDRs),
 		DirectCIDRs:             normalizeVPNStringList(form.DirectCIDRs),
@@ -3247,14 +3279,30 @@ type vpnDirectEndpointInfo struct {
 	CertSHA256 string
 }
 
-func (v *VPNClass) preferredVPNRelayMode(session *model.AgentVPNSession) string {
+func (v *VPNClass) preferredVPNRelayMode(session *model.AgentVPNSession, policy *model.AgentVPNPolicy) string {
 	if session == nil {
+		return model.VPNRelayModeDashboard
+	}
+	switch normalizeVPNRelayPreference(policyRelayMode(policy)) {
+	case model.VPNRelayModeDashboard:
+		return model.VPNRelayModeDashboard
+	case model.VPNRelayModeDirect:
+		if _, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+			return model.VPNRelayModeDirect
+		}
 		return model.VPNRelayModeDashboard
 	}
 	if _, ok := vpnDirectEndpoint(session.ExitServerID); ok {
 		return model.VPNRelayModeDirect
 	}
 	return model.VPNRelayModeDashboard
+}
+
+func policyRelayMode(policy *model.AgentVPNPolicy) string {
+	if policy == nil {
+		return ""
+	}
+	return policy.RelayMode
 }
 
 func vpnDirectEndpoint(serverID uint64) (vpnDirectEndpointInfo, bool) {

@@ -669,6 +669,37 @@ func TestVPNStartSessionPrefersDirectRelayWhenExitReportsEndpoint(t *testing.T) 
 	}
 }
 
+func TestVPNStartSessionRespectsDashboardRelayPolicyPreference(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectCertSHA256 = strings.Repeat("d", 64)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+	if err := DB.Model(policy).Update("relay_mode", model.VPNRelayModeDashboard).Error; err != nil {
+		t.Fatal(err)
+	}
+	policy.RelayMode = model.VPNRelayModeDashboard
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+
+	if exitStartReq.RelayMode != model.VPNRelayModeDashboard {
+		t.Fatalf("exit start relay mode = %q, want dashboard", exitStartReq.RelayMode)
+	}
+	if len(*h.relayCreates) != 1 {
+		t.Fatalf("dashboard relay preference must create relay endpoints, got %#v", *h.relayCreates)
+	}
+	if _, ok := exitStartReq.Extra["direct_address"]; ok {
+		t.Fatalf("dashboard relay request must not include direct endpoint extras: %#v", exitStartReq.Extra)
+	}
+}
+
 func TestVPNStartSessionFallsBackToDashboardRelayWhenDirectEntryStartFails(t *testing.T) {
 	h := newVPNHarness(t)
 	h.mustServer(2).Host.VPNDirectEnabled = true
