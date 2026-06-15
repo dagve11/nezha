@@ -40,6 +40,7 @@ var (
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
 const vpnPolicyStatusCheckTimeout = 5 * time.Second
 const vpnAgentDebugResultLimit = 30
+const vpnSessionLogLimit = 50
 
 var vpnLogTimeLocation = time.FixedZone("UTC+8", 8*60*60)
 
@@ -1495,8 +1496,8 @@ func (v *VPNClass) appendSessionLogs(sessionID string, lines []string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	logs := append(v.sessionLogs[sessionID], normalized...)
-	if len(logs) > 200 {
-		logs = logs[len(logs)-200:]
+	if len(logs) > vpnSessionLogLimit {
+		logs = logs[len(logs)-vpnSessionLogLimit:]
 	}
 	v.sessionLogs[sessionID] = logs
 }
