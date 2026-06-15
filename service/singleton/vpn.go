@@ -1296,7 +1296,7 @@ func (v *VPNClass) startPreparedVPNSession(session *model.AgentVPNSession, polic
 		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
 		v.appendControlLog(session.SessionID, "relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
 	} else if session.RelayMode == model.VPNRelayModeDirect {
-		if endpoint, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+		if endpoint, ok := vpnDirectEndpointForPolicy(session.ExitServerID, policy); ok {
 			v.appendControlLog(session.SessionID, "direct relay selected exit_address=%s", endpoint.Address)
 		}
 	}
@@ -1849,7 +1849,7 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
 		v.appendControlLog(session.SessionID, "relay recreated entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
 	} else if session.RelayMode == model.VPNRelayModeDirect {
-		if endpoint, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+		if endpoint, ok := vpnDirectEndpointForPolicy(session.ExitServerID, policy); ok {
 			v.appendControlLog(session.SessionID, "direct relay selected for %s exit_address=%s", action, endpoint.Address)
 		}
 	}
@@ -1969,6 +1969,9 @@ func (v *VPNClass) validatePolicyForm(actor VPNActor, form model.AgentVPNPolicyF
 		return err
 	}
 	if err := validateVPNRelayPreference(form.RelayMode); err != nil {
+		return err
+	}
+	if err := validateVPNExitNAT(form.ExitNATEnabled, form.ExitNATHost, form.ExitNATPort); err != nil {
 		return err
 	}
 	mode := normalizeVPNMode(form.Mode)
@@ -2092,6 +2095,9 @@ func vpnPolicyAuditDetail(policy *model.AgentVPNPolicy) map[string]string {
 		"mode":                       policy.Mode,
 		"rule_mode":                  policy.RuleMode,
 		"relay_mode":                 policy.RelayMode,
+		"exit_nat_enabled":           fmt.Sprint(policy.ExitNATEnabled),
+		"exit_nat_host":              policy.ExitNATHost,
+		"exit_nat_port":              fmt.Sprint(policy.ExitNATPort),
 		"domains":                    strings.Join(policy.Domains, ","),
 		"cidrs":                      strings.Join(policy.CIDRs, ","),
 		"direct_cidrs":               strings.Join(policy.DirectCIDRs, ","),
@@ -2512,7 +2518,7 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 		}
 	}
 	if req.RelayMode == model.VPNRelayModeDirect && role == model.VPNRoleEntry {
-		if endpoint, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+		if endpoint, ok := vpnDirectEndpointForPolicy(session.ExitServerID, policy); ok {
 			setVPNRequestExtra(&req, "direct_address", endpoint.Address)
 			setVPNRequestExtra(&req, "direct_cert_sha256", endpoint.CertSHA256)
 		}
@@ -2778,6 +2784,17 @@ func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]s
 	if value := strings.TrimSpace(detail["relay_mode"]); value != "" {
 		policy.RelayMode = normalizeVPNRelayPreference(value)
 	}
+	if value := strings.TrimSpace(detail["exit_nat_enabled"]); value != "" {
+		policy.ExitNATEnabled = strings.EqualFold(value, "true")
+	}
+	if value := strings.TrimSpace(detail["exit_nat_host"]); value != "" {
+		policy.ExitNATHost = value
+	}
+	if value := strings.TrimSpace(detail["exit_nat_port"]); value != "" {
+		if parsed, err := strconv.ParseUint(value, 10, 32); err == nil {
+			policy.ExitNATPort = uint32(parsed)
+		}
+	}
 	if value := strings.TrimSpace(detail["domains"]); value != "" {
 		policy.Domains = normalizeVPNStringList(strings.Split(value, ","))
 	}
@@ -2870,6 +2887,9 @@ func validateVPNPolicyRuntime(policy *model.AgentVPNPolicy) error {
 	if err := validateVPNRelayPreference(policy.RelayMode); err != nil {
 		return err
 	}
+	if err := validateVPNExitNAT(policy.ExitNATEnabled, policy.ExitNATHost, policy.ExitNATPort); err != nil {
+		return err
+	}
 	mode := normalizeVPNMode(policy.Mode)
 	ruleMode := normalizeVPNRuleMode(policy.RuleMode)
 	if mode == model.VPNModeSystemProxy && strings.TrimSpace(policy.ListenHTTP) == "" && strings.TrimSpace(policy.ListenSOCKS) == "" {
@@ -2958,6 +2978,36 @@ func validateVPNRelayPreference(relayMode string) error {
 	default:
 		return fmt.Errorf("unsupported vpn relay mode %q", relayMode)
 	}
+}
+
+func validateVPNExitNAT(enabled bool, host string, port uint32) error {
+	if !enabled {
+		return nil
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return errors.New("exit nat host is required")
+	}
+	if port == 0 || port > 65535 {
+		return errors.New("exit nat port must be between 1 and 65535")
+	}
+	if strings.Contains(host, "://") || strings.ContainsAny(host, "/?#@") || strings.IndexFunc(host, unicode.IsSpace) >= 0 {
+		return errors.New("exit nat host must be a host name or IP address without scheme, path, or credentials")
+	}
+	if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
+		return errors.New("exit nat host must not include a port")
+	}
+	trimmedHost := strings.Trim(host, "[]")
+	if addr, err := netip.ParseAddr(trimmedHost); err == nil {
+		if addr.IsUnspecified() {
+			return errors.New("exit nat host must not be unspecified")
+		}
+		return nil
+	}
+	if strings.Contains(trimmedHost, ":") {
+		return errors.New("exit nat host contains invalid IPv6 address")
+	}
+	return validateVPNDomain(trimmedHost)
 }
 
 func normalizeVPNRuleMode(mode string) string {
@@ -3185,6 +3235,9 @@ func vpnPolicyFromForm(userID uint64, form model.AgentVPNPolicyForm) *model.Agen
 		Mode:                    normalizeVPNMode(form.Mode),
 		RuleMode:                normalizeVPNRuleMode(form.RuleMode),
 		RelayMode:               normalizeVPNRelayPreference(form.RelayMode),
+		ExitNATEnabled:          form.ExitNATEnabled,
+		ExitNATHost:             strings.TrimSpace(form.ExitNATHost),
+		ExitNATPort:             form.ExitNATPort,
 		Domains:                 normalizeVPNStringList(form.Domains),
 		CIDRs:                   normalizeVPNStringList(form.CIDRs),
 		DirectCIDRs:             normalizeVPNStringList(form.DirectCIDRs),
@@ -3287,12 +3340,12 @@ func (v *VPNClass) preferredVPNRelayMode(session *model.AgentVPNSession, policy 
 	case model.VPNRelayModeDashboard:
 		return model.VPNRelayModeDashboard
 	case model.VPNRelayModeDirect:
-		if _, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+		if _, ok := vpnDirectEndpointForPolicy(session.ExitServerID, policy); ok {
 			return model.VPNRelayModeDirect
 		}
 		return model.VPNRelayModeDashboard
 	}
-	if _, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+	if _, ok := vpnDirectEndpointForPolicy(session.ExitServerID, policy); ok {
 		return model.VPNRelayModeDirect
 	}
 	return model.VPNRelayModeDashboard
@@ -3306,6 +3359,10 @@ func policyRelayMode(policy *model.AgentVPNPolicy) string {
 }
 
 func vpnDirectEndpoint(serverID uint64) (vpnDirectEndpointInfo, bool) {
+	return vpnDirectEndpointForPolicy(serverID, nil)
+}
+
+func vpnDirectEndpointForPolicy(serverID uint64, policy *model.AgentVPNPolicy) (vpnDirectEndpointInfo, bool) {
 	server, ok := ServerShared.Get(serverID)
 	if !ok || server == nil || server.Host == nil {
 		return vpnDirectEndpointInfo{}, false
@@ -3314,6 +3371,13 @@ func vpnDirectEndpoint(serverID uint64) (vpnDirectEndpointInfo, bool) {
 	certSHA := strings.TrimSpace(host.VPNDirectCertSHA256)
 	if !host.VPNDirectEnabled || host.VPNDirectListenPort == 0 || certSHA == "" {
 		return vpnDirectEndpointInfo{}, false
+	}
+	if policy != nil && policy.ExitNATEnabled {
+		natHost := strings.Trim(strings.TrimSpace(policy.ExitNATHost), "[]")
+		if natHost == "" || policy.ExitNATPort == 0 {
+			return vpnDirectEndpointInfo{}, false
+		}
+		return vpnDirectEndpointInfo{Address: net.JoinHostPort(natHost, fmt.Sprint(policy.ExitNATPort)), CertSHA256: certSHA}, true
 	}
 	if advertised := strings.TrimSpace(host.VPNDirectAdvertise); advertised != "" {
 		return vpnDirectEndpointInfo{Address: vpnDirectAddressWithPort(advertised, host.VPNDirectListenPort), CertSHA256: certSHA}, true

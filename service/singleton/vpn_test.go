@@ -669,6 +669,59 @@ func TestVPNStartSessionPrefersDirectRelayWhenExitReportsEndpoint(t *testing.T) 
 	}
 }
 
+func TestVPNStartSessionUsesExitNATMappingForDirectRelay(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectCertSHA256 = strings.Repeat("e", 64)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "NAT exit",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		RelayMode:           model.VPNRelayModeDirect,
+		ExitNATEnabled:      true,
+		ExitNATHost:         "nat.example.com",
+		ExitNATPort:         39090,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if exitStartReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("exit start relay mode = %q, want direct", exitStartReq.RelayMode)
+	}
+
+	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatalf("handle exit running: %v", err)
+	}
+	_, entryStartReq := readVPNTask(t, h.entryStream)
+	if entryStartReq.Extra["direct_address"] != "nat.example.com:39090" {
+		t.Fatalf("entry direct address = %q, want NAT mapping", entryStartReq.Extra["direct_address"])
+	}
+	if entryStartReq.Extra["direct_cert_sha256"] != strings.Repeat("e", 64) {
+		t.Fatalf("entry direct cert fingerprint mismatch: %#v", entryStartReq.Extra)
+	}
+}
+
 func TestVPNStartSessionRespectsDashboardRelayPolicyPreference(t *testing.T) {
 	h := newVPNHarness(t)
 	h.mustServer(2).Host.VPNDirectEnabled = true
@@ -1300,6 +1353,9 @@ func TestVPNSavePolicyWritesAuditWithRulesAndLimits(t *testing.T) {
 		"policy_id":                  fmt.Sprint(policy.ID),
 		"mode":                       model.VPNModeTunSplit,
 		"rule_mode":                  model.VPNRuleModeDomain,
+		"exit_nat_enabled":           "false",
+		"exit_nat_host":              "",
+		"exit_nat_port":              "0",
 		"domains":                    "github.com,api.github.com",
 		"cidrs":                      "140.82.112.0/20",
 		"direct_cidrs":               "127.0.0.0/8",
@@ -1319,6 +1375,41 @@ func TestVPNSavePolicyWritesAuditWithRulesAndLimits(t *testing.T) {
 		if audit.Detail[key] != want {
 			t.Fatalf("audit detail %q = %q, want %q; detail=%#v", key, audit.Detail[key], want, audit.Detail)
 		}
+	}
+}
+
+func TestVPNSavePolicyRejectsInvalidExitNATMapping(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+
+	for _, tc := range []struct {
+		name string
+		host string
+		port uint32
+	}{
+		{name: "missing host", host: "", port: 39090},
+		{name: "missing port", host: "nat.example.com", port: 0},
+		{name: "host with scheme", host: "https://nat.example.com", port: 39090},
+		{name: "host with port", host: "nat.example.com:39090", port: 39090},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+				Name:                "invalid NAT",
+				EntryServerID:       1,
+				ExitServerID:        2,
+				Mode:                model.VPNModeSystemProxy,
+				RuleMode:            model.VPNRuleModeGlobal,
+				ExitNATEnabled:      true,
+				ExitNATHost:         tc.host,
+				ExitNATPort:         tc.port,
+				ListenSOCKS:         "127.0.0.1:1080",
+				ExpiresSeconds:      3600,
+				NotificationGroupID: 9,
+			})
+			if err == nil {
+				t.Fatal("save policy must reject invalid exit NAT mapping")
+			}
+		})
 	}
 }
 

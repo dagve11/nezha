@@ -167,6 +167,9 @@ type AgentVPNPolicyForm struct {
 	Mode                    string   `json:"mode"`
 	RuleMode                string   `json:"rule_mode"`
 	RelayMode               string   `json:"relay_mode"`
+	ExitNATEnabled          bool     `json:"exit_nat_enabled"`
+	ExitNATHost             string   `json:"exit_nat_host"`
+	ExitNATPort             uint32   `json:"exit_nat_port"`
 	Domains                 []string `json:"domains"`
 	CIDRs                   []string `json:"cidrs"`
 	DirectCIDRs             []string `json:"direct_cidrs"`
@@ -234,6 +237,9 @@ type AgentVPNPolicy struct {
 	Mode                    string   `json:"mode" gorm:"index"`
 	RuleMode                string   `json:"rule_mode"`
 	RelayMode               string   `json:"relay_mode"`
+	ExitNATEnabled          bool     `json:"exit_nat_enabled"`
+	ExitNATHost             string   `json:"exit_nat_host"`
+	ExitNATPort             uint32   `json:"exit_nat_port"`
 	Domains                 []string `json:"domains" gorm:"-"`
 	CIDRs                   []string `json:"cidrs" gorm:"-"`
 	DirectCIDRs             []string `json:"direct_cidrs" gorm:"-"`
