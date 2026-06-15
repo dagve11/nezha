@@ -113,27 +113,28 @@ type VPNCoreSpec struct {
 }
 
 type VPNControlResult struct {
-	SessionID     string   `json:"session_id"`
-	Action        string   `json:"action"`
-	Role          string   `json:"role"`
-	State         string   `json:"state"`
-	CheckID       string   `json:"check_id,omitempty"`
-	CoreVersion   string   `json:"core_version,omitempty"`
-	CoreStatus    string   `json:"core_status,omitempty"`
-	CorePath      string   `json:"core_path,omitempty"`
-	RulesStatus   string   `json:"rules_status,omitempty"`
-	RulesPath     string   `json:"rules_path,omitempty"`
-	RulesVersion  string   `json:"rules_version,omitempty"`
-	LocalHTTP     string   `json:"local_http,omitempty"`
-	LocalSOCKS    string   `json:"local_socks,omitempty"`
-	TunName       string   `json:"tun_name,omitempty"`
-	UploadBytes   uint64   `json:"upload_bytes,omitempty"`
-	DownloadBytes uint64   `json:"download_bytes,omitempty"`
-	ActiveConns   uint32   `json:"active_conns,omitempty"`
-	LastError     string   `json:"last_error,omitempty"`
-	Logs          []string `json:"logs,omitempty"`
-	StartedAtUnix int64    `json:"started_at,omitempty"`
-	StoppedAtUnix int64    `json:"stopped_at,omitempty"`
+	SessionID          string   `json:"session_id"`
+	Action             string   `json:"action"`
+	Role               string   `json:"role"`
+	State              string   `json:"state"`
+	CheckID            string   `json:"check_id,omitempty"`
+	CoreVersion        string   `json:"core_version,omitempty"`
+	CoreStatus         string   `json:"core_status,omitempty"`
+	CorePath           string   `json:"core_path,omitempty"`
+	RulesStatus        string   `json:"rules_status,omitempty"`
+	RulesPath          string   `json:"rules_path,omitempty"`
+	RulesVersion       string   `json:"rules_version,omitempty"`
+	LocalHTTP          string   `json:"local_http,omitempty"`
+	LocalSOCKS         string   `json:"local_socks,omitempty"`
+	TunName            string   `json:"tun_name,omitempty"`
+	SystemProxyApplied *bool    `json:"system_proxy_applied,omitempty"`
+	UploadBytes        uint64   `json:"upload_bytes,omitempty"`
+	DownloadBytes      uint64   `json:"download_bytes,omitempty"`
+	ActiveConns        uint32   `json:"active_conns,omitempty"`
+	LastError          string   `json:"last_error,omitempty"`
+	Logs               []string `json:"logs,omitempty"`
+	StartedAtUnix      int64    `json:"started_at,omitempty"`
+	StoppedAtUnix      int64    `json:"stopped_at,omitempty"`
 }
 
 type AgentVPNDebugResult struct {
@@ -265,31 +266,32 @@ func (p *AgentVPNPolicy) AfterFind(tx *gorm.DB) error {
 
 type AgentVPNSession struct {
 	Common
-	PolicyID          uint64     `json:"policy_id" gorm:"index"`
-	EntryServerID     uint64     `json:"entry_server_id" gorm:"index"`
-	ExitServerID      uint64     `json:"exit_server_id" gorm:"index"`
-	SessionID         string     `json:"session_id" gorm:"uniqueIndex"`
-	TokenHash         string     `json:"-" gorm:"type:char(71)"`
-	Mode              string     `json:"mode"`
-	RuleMode          string     `json:"rule_mode"`
-	RelayMode         string     `json:"relay_mode"`
-	State             string     `json:"state" gorm:"index"`
-	EntryState        string     `json:"entry_state"`
-	ExitState         string     `json:"exit_state"`
-	EntryStreamID     string     `json:"entry_stream_id"`
-	ExitStreamID      string     `json:"exit_stream_id"`
-	LocalHTTP         string     `json:"local_http"`
-	LocalSOCKS        string     `json:"local_socks"`
-	TunName           string     `json:"tun_name"`
-	SetSystemProxy    bool       `json:"set_system_proxy"`
-	ControlOverride   bool       `json:"control_override"`
-	UploadBytes       uint64     `json:"upload_bytes"`
-	DownloadBytes     uint64     `json:"download_bytes"`
-	ActiveConnections uint32     `json:"active_connections"`
-	LastError         string     `json:"last_error"`
-	StartedAt         time.Time  `json:"started_at"`
-	ExpiresAt         time.Time  `json:"expires_at"`
-	StoppedAt         *time.Time `json:"stopped_at,omitempty"`
+	PolicyID           uint64     `json:"policy_id" gorm:"index"`
+	EntryServerID      uint64     `json:"entry_server_id" gorm:"index"`
+	ExitServerID       uint64     `json:"exit_server_id" gorm:"index"`
+	SessionID          string     `json:"session_id" gorm:"uniqueIndex"`
+	TokenHash          string     `json:"-" gorm:"type:char(71)"`
+	Mode               string     `json:"mode"`
+	RuleMode           string     `json:"rule_mode"`
+	RelayMode          string     `json:"relay_mode"`
+	State              string     `json:"state" gorm:"index"`
+	EntryState         string     `json:"entry_state"`
+	ExitState          string     `json:"exit_state"`
+	EntryStreamID      string     `json:"entry_stream_id"`
+	ExitStreamID       string     `json:"exit_stream_id"`
+	LocalHTTP          string     `json:"local_http"`
+	LocalSOCKS         string     `json:"local_socks"`
+	TunName            string     `json:"tun_name"`
+	SetSystemProxy     bool       `json:"set_system_proxy"`
+	SystemProxyApplied *bool      `json:"system_proxy_applied,omitempty"`
+	ControlOverride    bool       `json:"control_override"`
+	UploadBytes        uint64     `json:"upload_bytes"`
+	DownloadBytes      uint64     `json:"download_bytes"`
+	ActiveConnections  uint32     `json:"active_connections"`
+	LastError          string     `json:"last_error"`
+	StartedAt          time.Time  `json:"started_at"`
+	ExpiresAt          time.Time  `json:"expires_at"`
+	StoppedAt          *time.Time `json:"stopped_at,omitempty"`
 }
 
 type AgentVPNAuditLog struct {

@@ -2383,6 +2383,9 @@ func updateSessionFromVPNResult(session *model.AgentVPNSession, result model.VPN
 	if result.TunName != "" {
 		session.TunName = result.TunName
 	}
+	if result.Role == model.VPNRoleEntry && result.SystemProxyApplied != nil {
+		session.SystemProxyApplied = result.SystemProxyApplied
+	}
 	if result.UploadBytes != 0 {
 		session.UploadBytes = result.UploadBytes
 	}
@@ -2407,6 +2410,13 @@ func vpnControlResultDetail(result model.VPNControlResult) string {
 	}
 	if result.TunName != "" {
 		parts = append(parts, "tun="+result.TunName)
+	}
+	if result.SystemProxyApplied != nil {
+		status := "cleared"
+		if *result.SystemProxyApplied {
+			status = "applied"
+		}
+		parts = append(parts, "system_proxy="+status)
 	}
 	if result.UploadBytes != 0 || result.DownloadBytes != 0 {
 		parts = append(parts, fmt.Sprintf("traffic=%d/%d", result.UploadBytes, result.DownloadBytes))
