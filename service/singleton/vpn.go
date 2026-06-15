@@ -2252,10 +2252,11 @@ func vpnPolicyFailureNotification(title string, policy *model.AgentVPNPolicy, re
 func vpnEgressProbeSummary(logs []string) string {
 	for i := len(logs) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(logs[i])
-		if !strings.HasPrefix(line, "[egress]") {
+		idx := strings.Index(line, "[egress]")
+		if idx < 0 {
 			continue
 		}
-		return strings.TrimSpace(strings.TrimPrefix(line, "[egress]"))
+		return strings.TrimSpace(strings.TrimPrefix(line[idx:], "[egress]"))
 	}
 	return ""
 }

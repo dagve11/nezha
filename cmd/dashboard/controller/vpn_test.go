@@ -931,9 +931,10 @@ func TestVPNSessionStreamIncludesBufferedAgentSidecarLogs(t *testing.T) {
 	}
 	require.NoError(t, conn.ReadJSON(&frame))
 	require.Equal(t, session.SessionID, frame.Session.SessionID)
-	require.Contains(t, frame.Logs, "entry accepted connection")
-	require.Contains(t, frame.Logs, "entry proxy connected")
-	require.Contains(t, strings.Join(frame.Logs, "\n"), "[dashboard] agent report")
+	logText := strings.Join(frame.Logs, "\n")
+	require.Contains(t, logText, "entry accepted connection")
+	require.Contains(t, logText, "entry proxy connected")
+	require.Contains(t, logText, "[dashboard] agent report")
 }
 
 func attachControllerVPNTaskStream(t *testing.T, serverID uint64) *controllerVPNTaskStream {
