@@ -34,11 +34,14 @@ const (
 var (
 	vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 	vpnANSISequence     = regexp.MustCompile(`(?:\x1b)?\[[0-9;]*m`)
+	vpnLogTimestamp     = regexp.MustCompile(`^\[\d{2}:\d{2}:\d{2}\]\s`)
 )
 
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
 const vpnPolicyStatusCheckTimeout = 5 * time.Second
 const vpnAgentDebugResultLimit = 30
+
+var vpnLogTimeLocation = time.FixedZone("UTC+8", 8*60*60)
 
 var (
 	VPNShared *VPNClass
@@ -1485,6 +1488,10 @@ func (v *VPNClass) appendSessionLogs(sessionID string, lines []string) {
 	if len(normalized) == 0 {
 		return
 	}
+	receivedAt := time.Now()
+	for i, line := range normalized {
+		normalized[i] = timestampVPNLogLine(receivedAt, line)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	logs := append(v.sessionLogs[sessionID], normalized...)
@@ -1506,6 +1513,13 @@ func stripVPNLogANSI(line string) string {
 		return line
 	}
 	return vpnANSISequence.ReplaceAllString(line, "")
+}
+
+func timestampVPNLogLine(receivedAt time.Time, line string) string {
+	if vpnLogTimestamp.MatchString(line) {
+		return line
+	}
+	return "[" + receivedAt.In(vpnLogTimeLocation).Format("15:04:05") + "] " + line
 }
 
 func isRoutineVPNAccessLog(line string) bool {
