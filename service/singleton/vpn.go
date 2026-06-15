@@ -33,7 +33,7 @@ var vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
 const vpnPolicyStatusCheckTimeout = 5 * time.Second
-const vpnAgentDebugResultLimit = 500
+const vpnAgentDebugResultLimit = 30
 
 var (
 	VPNShared *VPNClass
@@ -767,7 +767,11 @@ func (v *VPNClass) ClearAgentDebugResults() {
 func (v *VPNClass) recordAgentDebugResult(reporterServerID uint64, result model.VPNControlResult) {
 	copied := result
 	if len(result.Logs) > 0 {
-		copied.Logs = append([]string(nil), result.Logs...)
+		logs := result.Logs
+		if len(logs) > vpnAgentDebugResultLimit {
+			logs = logs[len(logs)-vpnAgentDebugResultLimit:]
+		}
+		copied.Logs = append([]string(nil), logs...)
 	}
 
 	v.mu.Lock()
