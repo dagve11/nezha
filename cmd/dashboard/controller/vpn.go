@@ -125,6 +125,18 @@ func statusVPNPolicy(c *gin.Context) (*model.AgentVPNPolicyStatusCheck, error) {
 	return singleton.VPNShared.CheckPolicyStatus(vpnActorFromContext(c), id)
 }
 
+func listVPNAgentDebugResults(c *gin.Context) ([]model.AgentVPNDebugResult, error) {
+	limit := 200
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, err
+		}
+		limit = parsed
+	}
+	return singleton.VPNShared.AgentDebugResults(vpnActorFromContext(c), limit), nil
+}
+
 func listVPNSession(c *gin.Context) ([]*model.AgentVPNSession, error) {
 	var sessions []*model.AgentVPNSession
 	if err := singleton.DB.Order("id DESC").Find(&sessions).Error; err != nil {

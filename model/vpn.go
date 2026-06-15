@@ -136,6 +136,19 @@ type VPNControlResult struct {
 	StoppedAtUnix int64    `json:"stopped_at,omitempty"`
 }
 
+type AgentVPNDebugResult struct {
+	ID                 uint64           `json:"id"`
+	ReportedAt         time.Time        `json:"reported_at"`
+	ReporterServerID   uint64           `json:"reporter_server_id"`
+	ReporterServerName string           `json:"reporter_server_name,omitempty"`
+	SessionID          string           `json:"session_id"`
+	Action             string           `json:"action"`
+	Role               string           `json:"role"`
+	State              string           `json:"state"`
+	LastError          string           `json:"last_error,omitempty"`
+	Result             VPNControlResult `json:"result"`
+}
+
 type AgentVPNPolicyForm struct {
 	Name                    string   `json:"name"`
 	EntryServerID           uint64   `json:"entry_server_id"`

@@ -33,6 +33,7 @@ var vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
 const vpnPolicyStatusCheckTimeout = 5 * time.Second
+const vpnAgentDebugResultLimit = 500
 
 var (
 	VPNShared *VPNClass
@@ -74,12 +75,14 @@ func (a VPNActor) IsAdmin() bool {
 }
 
 type VPNClass struct {
-	mu              sync.Mutex
-	sessionTokens   map[string]string
-	sessionPolicies map[string]*model.AgentVPNPolicy
-	sessionLogs     map[string][]string
-	relayTraffic    map[string]vpnRelayTrafficSnapshot
-	statusWaiters   map[string]chan vpnPolicyStatusAgentResult
+	mu                sync.Mutex
+	sessionTokens     map[string]string
+	sessionPolicies   map[string]*model.AgentVPNPolicy
+	sessionLogs       map[string][]string
+	relayTraffic      map[string]vpnRelayTrafficSnapshot
+	statusWaiters     map[string]chan vpnPolicyStatusAgentResult
+	agentDebugSeq     uint64
+	agentDebugResults []model.AgentVPNDebugResult
 
 	relayTrafficFlushInterval time.Duration
 }
@@ -502,6 +505,8 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPNControlResult) (*model.AgentVPNSession, error) {
 	var session model.AgentVPNSession
 	sessionID := strings.TrimSpace(result.SessionID)
+	result.SessionID = sessionID
+	v.recordAgentDebugResult(reporterServerID, result)
 	v.deliverPolicyStatusResult(reporterServerID, result)
 	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
 		if isPolicyCoreSessionID(sessionID) {
@@ -723,6 +728,56 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		return nil, err
 	}
 	return &session, nil
+}
+
+func (v *VPNClass) AgentDebugResults(actor VPNActor, limit int) []model.AgentVPNDebugResult {
+	if limit <= 0 || limit > vpnAgentDebugResultLimit {
+		limit = vpnAgentDebugResultLimit
+	}
+	v.mu.Lock()
+	copied := make([]model.AgentVPNDebugResult, len(v.agentDebugResults))
+	copy(copied, v.agentDebugResults)
+	v.mu.Unlock()
+
+	results := make([]model.AgentVPNDebugResult, 0, limit)
+	for i := len(copied) - 1; i >= 0 && len(results) < limit; i-- {
+		entry := copied[i]
+		if !actor.IsAdmin() && !actorCanUseVPNServer(actor, entry.ReporterServerID) {
+			continue
+		}
+		if len(entry.Result.Logs) > 0 {
+			entry.Result.Logs = append([]string(nil), entry.Result.Logs...)
+		}
+		results = append(results, entry)
+	}
+	return results
+}
+
+func (v *VPNClass) recordAgentDebugResult(reporterServerID uint64, result model.VPNControlResult) {
+	copied := result
+	if len(result.Logs) > 0 {
+		copied.Logs = append([]string(nil), result.Logs...)
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.agentDebugSeq++
+	entry := model.AgentVPNDebugResult{
+		ID:                 v.agentDebugSeq,
+		ReportedAt:         time.Now(),
+		ReporterServerID:   reporterServerID,
+		ReporterServerName: serverName(reporterServerID),
+		SessionID:          copied.SessionID,
+		Action:             copied.Action,
+		Role:               copied.Role,
+		State:              copied.State,
+		LastError:          copied.LastError,
+		Result:             copied,
+	}
+	v.agentDebugResults = append(v.agentDebugResults, entry)
+	if len(v.agentDebugResults) > vpnAgentDebugResultLimit {
+		v.agentDebugResults = append([]model.AgentVPNDebugResult(nil), v.agentDebugResults[len(v.agentDebugResults)-vpnAgentDebugResultLimit:]...)
+	}
 }
 
 func (v *VPNClass) StopSession(actor VPNActor, sessionID string) (*model.AgentVPNSession, error) {
