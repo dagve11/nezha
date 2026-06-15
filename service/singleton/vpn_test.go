@@ -3429,8 +3429,8 @@ func TestVPNFallbackPolicyRestoresTunDNSAndProbeFieldsFromAudit(t *testing.T) {
 	if len(fallback.DirectCIDRs) != 1 || fallback.DirectCIDRs[0] != "203.0.113.0/24" {
 		t.Fatalf("fallback direct cidrs = %#v, want 203.0.113.0/24", fallback.DirectCIDRs)
 	}
-	if fallback.ExpiresSeconds != 3600 {
-		t.Fatalf("fallback expires = %d, want 3600", fallback.ExpiresSeconds)
+	if fallback.ExpiresSeconds != 86400 {
+		t.Fatalf("fallback expires = %d, want 86400", fallback.ExpiresSeconds)
 	}
 	if fallback.MaxUploadBytes != 1024 || fallback.MaxDownloadBytes != 2048 || fallback.MaxConnections != 32 || fallback.IdleTimeoutSeconds != 60 {
 		t.Fatalf("fallback limits mismatch: upload=%d download=%d conns=%d idle=%d", fallback.MaxUploadBytes, fallback.MaxDownloadBytes, fallback.MaxConnections, fallback.IdleTimeoutSeconds)

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	defaultVPNExpiresSeconds        = 3600
+	defaultVPNExpiresSeconds        = 24 * 60 * 60
 	defaultVPNCoreDownloadBaseURL   = "https://github.com/dagve11/sb-core/releases/download/V1.0.0"
 	defaultVPNCoreCNDownloadBaseURL = "https://gitee.com/AGZZY11/sb-core/releases/download/V1.0.0"
 	defaultVPNCoreManifestURL       = defaultVPNCoreDownloadBaseURL + "/manifest.json"
