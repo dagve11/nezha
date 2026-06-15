@@ -31,7 +31,10 @@ const (
 	defaultVPNCoreCNManifestURL     = defaultVPNCoreCNDownloadBaseURL + "/manifest.json"
 )
 
-var vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+var (
+	vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	vpnANSISequence     = regexp.MustCompile(`(?:\x1b)?\[[0-9;]*m`)
+)
 
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
 const vpnPolicyStatusCheckTimeout = 5 * time.Second
@@ -1474,7 +1477,8 @@ func (v *VPNClass) appendSessionLogs(sessionID string, lines []string) {
 	}
 	normalized := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if line = strings.TrimRight(line, "\r\n"); line != "" {
+		line = strings.TrimRight(stripVPNLogANSI(line), "\r\n")
+		if line != "" && !isRoutineVPNAccessLog(line) {
 			normalized = append(normalized, line)
 		}
 	}
@@ -1495,6 +1499,23 @@ func (v *VPNClass) appendControlLog(sessionID string, format string, args ...any
 		return
 	}
 	v.appendSessionLogs(sessionID, []string{"[dashboard] " + fmt.Sprintf(format, args...)})
+}
+
+func stripVPNLogANSI(line string) string {
+	if strings.TrimSpace(line) == "" {
+		return line
+	}
+	return vpnANSISequence.ReplaceAllString(line, "")
+}
+
+func isRoutineVPNAccessLog(line string) bool {
+	line = strings.TrimSpace(line)
+	if !strings.Contains(line, "INFO") {
+		return false
+	}
+	return strings.Contains(line, "inbound connection from ") ||
+		strings.Contains(line, "inbound connection to ") ||
+		strings.Contains(line, "outbound connection to ")
 }
 
 func (v *VPNClass) sendControl(server *model.Server, session *model.AgentVPNSession, policy *model.AgentVPNPolicy, role string, action string, token string) error {
