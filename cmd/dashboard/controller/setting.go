@@ -106,6 +106,10 @@ func updateConfig(c *gin.Context) (any, error) {
 	singleton.Conf.WebRealIPHeader = sf.WebRealIPHeader
 	singleton.Conf.AgentRealIPHeader = sf.AgentRealIPHeader
 	singleton.Conf.AgentTLS = sf.AgentTLS
+	singleton.Conf.VPNDebug = sf.VPNDebug
+	if !sf.VPNDebug && singleton.VPNShared != nil {
+		singleton.VPNShared.ClearAgentDebugResults()
+	}
 	singleton.Conf.UserTemplate = sf.UserTemplate
 	if sf.TSDBEnabled != nil {
 		oldTSDB := singleton.Conf.TSDB

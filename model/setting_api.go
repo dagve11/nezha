@@ -17,6 +17,7 @@ type SettingForm struct {
 	AgentTLS                    bool  `json:"tls,omitempty" validate:"optional"`
 	EnableIPChangeNotification  bool  `json:"enable_ip_change_notification,omitempty" validate:"optional"`
 	EnablePlainIPInNotification bool  `json:"enable_plain_ip_in_notification,omitempty" validate:"optional"`
+	VPNDebug                    bool  `json:"vpn_debug,omitempty" validate:"optional"`
 	TSDBEnabled                 *bool `json:"tsdb_enabled,omitempty" validate:"optional"`
 }
 

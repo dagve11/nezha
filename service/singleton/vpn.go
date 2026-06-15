@@ -506,7 +506,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 	var session model.AgentVPNSession
 	sessionID := strings.TrimSpace(result.SessionID)
 	result.SessionID = sessionID
-	v.recordAgentDebugResult(reporterServerID, result)
+	if Conf != nil && Conf.VPNDebug {
+		v.recordAgentDebugResult(reporterServerID, result)
+	}
 	v.deliverPolicyStatusResult(reporterServerID, result)
 	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
 		if isPolicyCoreSessionID(sessionID) {
@@ -731,6 +733,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 }
 
 func (v *VPNClass) AgentDebugResults(actor VPNActor, limit int) []model.AgentVPNDebugResult {
+	if Conf == nil || !Conf.VPNDebug {
+		return []model.AgentVPNDebugResult{}
+	}
 	if limit <= 0 || limit > vpnAgentDebugResultLimit {
 		limit = vpnAgentDebugResultLimit
 	}
@@ -751,6 +756,12 @@ func (v *VPNClass) AgentDebugResults(actor VPNActor, limit int) []model.AgentVPN
 		results = append(results, entry)
 	}
 	return results
+}
+
+func (v *VPNClass) ClearAgentDebugResults() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.agentDebugResults = nil
 }
 
 func (v *VPNClass) recordAgentDebugResult(reporterServerID uint64, result model.VPNControlResult) {

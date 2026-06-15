@@ -58,6 +58,7 @@ type ConfigDashboard struct {
 	IgnoredIPNotification       string `koanf:"ignored_ip_notification" json:"ignored_ip_notification,omitempty"` // 特定服务器IP（多个服务器用逗号分隔）
 
 	DNSServers string `koanf:"dns_servers" json:"dns_servers,omitempty"`
+	VPNDebug   bool   `koanf:"vpn_debug" json:"vpn_debug,omitempty"` // Agent VPN 调试结果记录
 }
 
 type Config struct {
