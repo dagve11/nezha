@@ -2385,8 +2385,46 @@ func updateSessionFromVPNResult(session *model.AgentVPNSession, result model.VPN
 	if result.TunName != "" {
 		session.TunName = result.TunName
 	}
-	if result.Role == model.VPNRoleEntry && result.SystemProxyApplied != nil {
-		session.SystemProxyApplied = result.SystemProxyApplied
+	if result.Role == model.VPNRoleEntry {
+		if result.RuntimeStatus != "" {
+			session.RuntimeStatus = result.RuntimeStatus
+		}
+		if result.ModeStatus != "" {
+			session.ModeStatus = result.ModeStatus
+		}
+		if result.RuleModeStatus != "" {
+			session.RuleModeStatus = result.RuleModeStatus
+		}
+		if result.CoreStatus != "" {
+			session.CoreStatus = result.CoreStatus
+		}
+		if result.CorePath != "" {
+			session.CorePath = result.CorePath
+		}
+		if result.CoreVersion != "" {
+			session.CoreVersion = result.CoreVersion
+		}
+		if result.RulesStatus != "" {
+			session.RulesStatus = result.RulesStatus
+		}
+		if result.RulesPath != "" {
+			session.RulesPath = result.RulesPath
+		}
+		if result.RulesVersion != "" {
+			session.RulesVersion = result.RulesVersion
+		}
+		if result.SystemProxyApplied != nil {
+			session.SystemProxyApplied = result.SystemProxyApplied
+		}
+		if result.SystemProxyStatus != "" {
+			session.SystemProxyStatus = result.SystemProxyStatus
+			session.SystemProxyCurrent = result.SystemProxyCurrent
+			session.SystemProxyExpected = result.SystemProxyExpected
+		}
+		if result.TunStatus != "" {
+			session.TunStatus = result.TunStatus
+			session.TunInterface = result.TunInterface
+		}
 	}
 	if result.UploadBytes != 0 {
 		session.UploadBytes = result.UploadBytes
@@ -2413,12 +2451,30 @@ func vpnControlResultDetail(result model.VPNControlResult) string {
 	if result.TunName != "" {
 		parts = append(parts, "tun="+result.TunName)
 	}
+	if result.RuntimeStatus != "" {
+		parts = append(parts, "runtime="+result.RuntimeStatus)
+	}
+	if result.RuleModeStatus != "" {
+		parts = append(parts, "rule_mode="+result.RuleModeStatus)
+	}
+	if result.CoreStatus != "" {
+		parts = append(parts, "core="+result.CoreStatus)
+	}
+	if result.RulesStatus != "" {
+		parts = append(parts, "rules="+result.RulesStatus)
+	}
 	if result.SystemProxyApplied != nil {
 		status := "cleared"
 		if *result.SystemProxyApplied {
 			status = "applied"
 		}
 		parts = append(parts, "system_proxy="+status)
+	}
+	if result.SystemProxyStatus != "" {
+		parts = append(parts, "system_proxy_status="+result.SystemProxyStatus)
+	}
+	if result.TunStatus != "" {
+		parts = append(parts, "tun_status="+result.TunStatus)
 	}
 	if result.UploadBytes != 0 || result.DownloadBytes != 0 {
 		parts = append(parts, fmt.Sprintf("traffic=%d/%d", result.UploadBytes, result.DownloadBytes))
