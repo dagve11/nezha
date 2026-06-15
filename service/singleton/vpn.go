@@ -553,6 +553,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 	updateSessionFromVPNResult(&session, result)
 
 	if result.State == model.VPNStateFailed {
+		if fallbackSession, handled, fallbackErr := v.fallbackDirectStartFailure(policy, &session, result); handled {
+			return fallbackSession, fallbackErr
+		}
 		session.State = model.VPNStateFailed
 		if session.LastError == "" {
 			session.LastError = result.LastError
@@ -630,6 +633,10 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			message += "\nAgent 清理日志: " + agentCleanupLogs
 		}
 		sendVPNNotification(policy.NotificationGroupID, message, "")
+		return &session, nil
+	}
+
+	if v.stopRunningSessionForReportedLimit(policy, &session, result) {
 		return &session, nil
 	}
 
@@ -739,6 +746,34 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		return nil, err
 	}
 	return &session, nil
+}
+
+func (v *VPNClass) stopRunningSessionForReportedLimit(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, result model.VPNControlResult) bool {
+	if policy == nil || session == nil || session.State != model.VPNStateRunning || result.Role != model.VPNRoleEntry {
+		return false
+	}
+	if result.UploadBytes == 0 && result.DownloadBytes == 0 && result.ActiveConns == 0 {
+		return false
+	}
+	if exceeded, reason := vpnTrafficLimitExceeded(policy, session.UploadBytes, session.DownloadBytes); exceeded {
+		v.stopSessionForRelayLimit(session, policy, reason, "traffic limit exceeded", "已因流量超限停止", describeVPNTrafficLimit(policy), fmt.Sprintf("上传 %d B / 下载 %d B", session.UploadBytes, session.DownloadBytes), map[string]string{
+			"reason":         reason,
+			"upload_bytes":   fmt.Sprint(session.UploadBytes),
+			"download_bytes": fmt.Sprint(session.DownloadBytes),
+			"source":         session.RelayMode,
+		})
+		return true
+	}
+	if exceeded, reason := vpnConnectionLimitExceeded(policy, session.ActiveConnections); exceeded {
+		v.stopSessionForRelayLimit(session, policy, reason, "connection limit exceeded", "已因连接数超限停止", describeVPNConnectionLimit(policy), fmt.Sprintf("连接数 %d", session.ActiveConnections), map[string]string{
+			"reason":             reason,
+			"active_connections": fmt.Sprint(session.ActiveConnections),
+			"max_connections":    fmt.Sprint(policy.MaxConnections),
+			"source":             session.RelayMode,
+		})
+		return true
+	}
+	return false
 }
 
 func (v *VPNClass) AgentDebugResults(actor VPNActor, limit int) []model.AgentVPNDebugResult {
@@ -1256,9 +1291,14 @@ func (v *VPNClass) startPreparedVPNSession(session *model.AgentVPNSession, polic
 		return v.failPreparedVPNStart(session, policy, action, "exit_token_missing_after_core_prepared", err)
 	}
 
-	if VPNRelayCreator != nil {
+	session.RelayMode = v.preferredVPNRelayMode(session)
+	if session.RelayMode == model.VPNRelayModeDashboard && VPNRelayCreator != nil {
 		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
 		v.appendControlLog(session.SessionID, "relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
+	} else if session.RelayMode == model.VPNRelayModeDirect {
+		if endpoint, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+			v.appendControlLog(session.SessionID, "direct relay selected exit_address=%s", endpoint.Address)
+		}
 	}
 	session.State = model.VPNStateStarting
 	session.EntryState = model.VPNStatePending
@@ -1298,6 +1338,65 @@ func (v *VPNClass) failPreparedVPNStart(session *model.AgentVPNSession, policy *
 	v.finalizeVPNSessionRuntime(session.SessionID)
 	v.notifyLifecycleFailure(policy, session, action, "")
 	return session, cause
+}
+
+func (v *VPNClass) fallbackDirectStartFailure(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, result model.VPNControlResult) (*model.AgentVPNSession, bool, error) {
+	if session == nil || policy == nil {
+		return nil, false, nil
+	}
+	if session.RelayMode != model.VPNRelayModeDirect || result.Role != model.VPNRoleEntry {
+		return nil, false, nil
+	}
+	if result.Action != model.VPNActionStart && result.Action != model.VPNActionRestart {
+		return nil, false, nil
+	}
+	if session.State == model.VPNStateRunning {
+		return nil, false, nil
+	}
+	token, err := v.tokenForSession(session)
+	if err != nil {
+		return nil, false, nil
+	}
+	reason := firstNonEmptyString(result.LastError, "entry direct relay failed")
+	v.appendControlLog(session.SessionID, "direct relay failed on entry agent; falling back to dashboard relay: %s", reason)
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, true, "direct relay fallback to dashboard", map[string]string{
+		"direct_attempted": "true",
+		"direct_fallback":  "true",
+		"reason":           reason,
+	})
+	session.RelayMode = model.VPNRelayModeDashboard
+	session.State = model.VPNStateStarting
+	session.EntryState = model.VPNStatePending
+	session.ExitState = model.VPNStateStarting
+	session.LastError = ""
+	if VPNRelayCreator != nil {
+		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
+		v.appendControlLog(session.SessionID, "fallback relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
+	}
+	if err := DB.Save(session).Error; err != nil {
+		return session, true, err
+	}
+	exit, ok := ServerShared.Get(session.ExitServerID)
+	if !ok || exit == nil || exit.GetTaskStream() == nil {
+		err := fmt.Errorf("exit server %d is offline", session.ExitServerID)
+		session.State = model.VPNStateFailed
+		session.ExitState = model.VPNStateFailed
+		session.LastError = err.Error()
+		_ = DB.Save(session).Error
+		v.finalizeVPNSessionRuntime(session.SessionID)
+		v.notifyLifecycleFailure(policy, session, result.Action, "")
+		return session, true, err
+	}
+	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, result.Action, token); err != nil {
+		session.State = model.VPNStateFailed
+		session.ExitState = model.VPNStateFailed
+		session.LastError = err.Error()
+		_ = DB.Save(session).Error
+		v.finalizeVPNSessionRuntime(session.SessionID)
+		v.notifyLifecycleFailure(policy, session, result.Action, "")
+		return session, true, err
+	}
+	return session, true, nil
 }
 
 func (v *VPNClass) recordRelayTraffic(sessionID string, uploadBytes uint64, downloadBytes uint64, activeConnections uint32) {
@@ -1723,7 +1822,7 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	session.TokenHash = hashVPNToken(token)
 	session.Mode = policy.Mode
 	session.RuleMode = normalizeVPNRuleMode(policy.RuleMode)
-	session.RelayMode = model.VPNRelayModeDashboard
+	session.RelayMode = v.preferredVPNRelayMode(session)
 	session.State = model.VPNStateStarting
 	session.EntryState = model.VPNStatePending
 	session.ExitState = model.VPNStateStarting
@@ -1746,9 +1845,13 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	v.sessionPolicies[session.SessionID] = cloneVPNPolicy(policy)
 	v.mu.Unlock()
 
-	if VPNRelayCreator != nil {
+	if session.RelayMode == model.VPNRelayModeDashboard && VPNRelayCreator != nil {
 		VPNRelayCreator(session.SessionID, session.EntryStreamID, session.EntryServerID, session.ExitStreamID, session.ExitServerID)
 		v.appendControlLog(session.SessionID, "relay recreated entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
+	} else if session.RelayMode == model.VPNRelayModeDirect {
+		if endpoint, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+			v.appendControlLog(session.SessionID, "direct relay selected for %s exit_address=%s", action, endpoint.Address)
+		}
 	}
 
 	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, action, token); err != nil {
@@ -2404,6 +2507,12 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 			setVPNRequestExtra(&req, "egress_expected_ips", expectedIPs)
 		}
 	}
+	if req.RelayMode == model.VPNRelayModeDirect && role == model.VPNRoleEntry {
+		if endpoint, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+			setVPNRequestExtra(&req, "direct_address", endpoint.Address)
+			setVPNRequestExtra(&req, "direct_cert_sha256", endpoint.CertSHA256)
+		}
+	}
 	return req
 }
 
@@ -2463,13 +2572,13 @@ func updateSessionFromVPNResult(session *model.AgentVPNSession, result model.VPN
 			session.TunInterface = result.TunInterface
 		}
 	}
-	if result.UploadBytes != 0 {
+	if result.TrafficReported || result.UploadBytes != 0 {
 		session.UploadBytes = result.UploadBytes
 	}
-	if result.DownloadBytes != 0 {
+	if result.TrafficReported || result.DownloadBytes != 0 {
 		session.DownloadBytes = result.DownloadBytes
 	}
-	if result.ActiveConns != 0 {
+	if result.TrafficReported || result.ActiveConns != 0 {
 		session.ActiveConnections = result.ActiveConns
 	}
 	if result.LastError != "" {
@@ -2513,10 +2622,10 @@ func vpnControlResultDetail(result model.VPNControlResult) string {
 	if result.TunStatus != "" {
 		parts = append(parts, "tun_status="+result.TunStatus)
 	}
-	if result.UploadBytes != 0 || result.DownloadBytes != 0 {
+	if result.TrafficReported || result.UploadBytes != 0 || result.DownloadBytes != 0 {
 		parts = append(parts, fmt.Sprintf("traffic=%d/%d", result.UploadBytes, result.DownloadBytes))
 	}
-	if result.ActiveConns != 0 {
+	if result.TrafficReported || result.ActiveConns != 0 {
 		parts = append(parts, fmt.Sprintf("connections=%d", result.ActiveConns))
 	}
 	if result.LastError != "" {
@@ -2811,6 +2920,8 @@ func validateVPNMode(mode string) error {
 
 func normalizeVPNRelayMode(relayMode string) string {
 	switch strings.TrimSpace(relayMode) {
+	case model.VPNRelayModeDirect:
+		return model.VPNRelayModeDirect
 	case model.VPNRelayModeDashboard:
 		return model.VPNRelayModeDashboard
 	default:
@@ -3129,6 +3240,64 @@ func vpnServerPublicIPs(serverID uint64) []string {
 	}
 	ips := []string{server.GeoIP.IP.IPv4Addr, server.GeoIP.IP.IPv6Addr}
 	return normalizeVPNStringList(ips)
+}
+
+type vpnDirectEndpointInfo struct {
+	Address    string
+	CertSHA256 string
+}
+
+func (v *VPNClass) preferredVPNRelayMode(session *model.AgentVPNSession) string {
+	if session == nil {
+		return model.VPNRelayModeDashboard
+	}
+	if _, ok := vpnDirectEndpoint(session.ExitServerID); ok {
+		return model.VPNRelayModeDirect
+	}
+	return model.VPNRelayModeDashboard
+}
+
+func vpnDirectEndpoint(serverID uint64) (vpnDirectEndpointInfo, bool) {
+	server, ok := ServerShared.Get(serverID)
+	if !ok || server == nil || server.Host == nil {
+		return vpnDirectEndpointInfo{}, false
+	}
+	host := server.Host
+	certSHA := strings.TrimSpace(host.VPNDirectCertSHA256)
+	if !host.VPNDirectEnabled || host.VPNDirectListenPort == 0 || certSHA == "" {
+		return vpnDirectEndpointInfo{}, false
+	}
+	if advertised := strings.TrimSpace(host.VPNDirectAdvertise); advertised != "" {
+		return vpnDirectEndpointInfo{Address: vpnDirectAddressWithPort(advertised, host.VPNDirectListenPort), CertSHA256: certSHA}, true
+	}
+	if server.GeoIP == nil {
+		return vpnDirectEndpointInfo{}, false
+	}
+	for _, ip := range []string{server.GeoIP.IP.IPv4Addr, server.GeoIP.IP.IPv6Addr} {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		return vpnDirectEndpointInfo{Address: net.JoinHostPort(ip, fmt.Sprint(host.VPNDirectListenPort)), CertSHA256: certSHA}, true
+	}
+	return vpnDirectEndpointInfo{}, false
+}
+
+func vpnDirectAddressWithPort(address string, port uint32) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	if _, _, err := net.SplitHostPort(address); err == nil {
+		return address
+	}
+	if parsed, err := url.Parse(address); err == nil && parsed.Host != "" {
+		if _, _, splitErr := net.SplitHostPort(parsed.Host); splitErr == nil {
+			return parsed.Host
+		}
+		return net.JoinHostPort(parsed.Host, fmt.Sprint(port))
+	}
+	return net.JoinHostPort(strings.Trim(address, "[]"), fmt.Sprint(port))
 }
 
 func hostWithoutPort(value string) string {

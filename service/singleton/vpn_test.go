@@ -608,6 +608,208 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 	}
 }
 
+func TestVPNStartSessionPrefersDirectRelayWhenExitReportsEndpoint(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectCertSHA256 = strings.Repeat("a", 64)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	_, exitPrepareReq := readVPNTask(t, h.exitStream)
+	_, entryPrepareReq := readVPNTask(t, h.entryStream)
+	if exitPrepareReq.RelayMode != model.VPNRelayModeDashboard || entryPrepareReq.RelayMode != model.VPNRelayModeDashboard {
+		t.Fatalf("prepare requests must stay dashboard-neutral, got exit=%q entry=%q", exitPrepareReq.RelayMode, entryPrepareReq.RelayMode)
+	}
+
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if len(*h.relayCreates) != 0 {
+		t.Fatalf("direct relay must not create dashboard relay endpoints, got %#v", *h.relayCreates)
+	}
+	if exitStartReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("exit start relay mode = %q, want direct", exitStartReq.RelayMode)
+	}
+	if exitStartReq.Token == "" {
+		t.Fatal("exit direct start must include the per-session token")
+	}
+
+	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatalf("handle exit running: %v", err)
+	}
+	_, entryStartReq := readVPNTask(t, h.entryStream)
+	if entryStartReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("entry start relay mode = %q, want direct", entryStartReq.RelayMode)
+	}
+	if entryStartReq.Extra["direct_address"] != "198.51.100.20:8090" {
+		t.Fatalf("entry direct address = %q, want GeoIP endpoint", entryStartReq.Extra["direct_address"])
+	}
+	if entryStartReq.Extra["direct_cert_sha256"] != strings.Repeat("a", 64) {
+		t.Fatalf("entry direct cert fingerprint mismatch: %#v", entryStartReq.Extra)
+	}
+	if entryStartReq.Token != exitStartReq.Token {
+		t.Fatal("entry and exit direct starts must share the same per-session token")
+	}
+
+	var stored model.AgentVPNSession
+	if err := DB.First(&stored, session.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("stored relay mode = %q, want direct", stored.RelayMode)
+	}
+}
+
+func TestVPNStartSessionFallsBackToDashboardRelayWhenDirectEntryStartFails(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectCertSHA256 = strings.Repeat("b", 64)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if exitStartReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("exit start relay mode = %q, want direct", exitStartReq.RelayMode)
+	}
+	if len(*h.relayCreates) != 0 {
+		t.Fatalf("direct start must not create relay before fallback, got %#v", *h.relayCreates)
+	}
+	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatalf("handle exit running: %v", err)
+	}
+	_, directEntryReq := readVPNTask(t, h.entryStream)
+	if directEntryReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("entry start relay mode = %q, want direct", directEntryReq.RelayMode)
+	}
+
+	session, err = h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleEntry,
+		State:     model.VPNStateFailed,
+		LastError: "direct dial timeout",
+	})
+	if err != nil {
+		t.Fatalf("direct entry failure should fall back without returning error: %v", err)
+	}
+	if session.RelayMode != model.VPNRelayModeDashboard {
+		t.Fatalf("fallback relay mode = %q, want dashboard", session.RelayMode)
+	}
+	if session.State != model.VPNStateStarting || session.EntryState != model.VPNStatePending || session.ExitState != model.VPNStateStarting {
+		t.Fatalf("fallback states mismatch: state=%q entry=%q exit=%q", session.State, session.EntryState, session.ExitState)
+	}
+	if len(*h.relayCreates) != 1 {
+		t.Fatalf("fallback must create one dashboard relay, got %#v", *h.relayCreates)
+	}
+	_, fallbackExitReq := readVPNTask(t, h.exitStream)
+	if fallbackExitReq.Action != model.VPNActionStart || fallbackExitReq.Role != model.VPNRoleExit || fallbackExitReq.RelayMode != model.VPNRelayModeDashboard {
+		t.Fatalf("fallback must redispatch dashboard exit start, got %+v", fallbackExitReq)
+	}
+	if fallbackExitReq.Token != directEntryReq.Token {
+		t.Fatal("fallback dashboard start must keep the existing per-session token")
+	}
+
+	var audit model.AgentVPNAuditLog
+	if err := DB.Where("action = ? AND session_id = ? AND message = ?", model.VPNAuditActionStatus, session.SessionID, "direct relay fallback to dashboard").Last(&audit).Error; err != nil {
+		t.Fatalf("fallback must write audit status: %v", err)
+	}
+	if audit.Detail["direct_attempted"] != "true" || audit.Detail["direct_fallback"] != "true" {
+		t.Fatalf("fallback audit detail mismatch: %#v", audit.Detail)
+	}
+}
+
+func TestVPNDirectTrafficStatusStillEnforcesLimits(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectCertSHA256 = strings.Repeat("c", 64)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+	if err := DB.Model(policy).Update("max_upload_bytes", uint64(10)).Error; err != nil {
+		t.Fatal(err)
+	}
+	policy.MaxUploadBytes = 10
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatalf("handle exit running: %v", err)
+	}
+	readVPNTask(t, h.entryStream)
+	session, err = h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleEntry,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatalf("handle entry running: %v", err)
+	}
+	if session.State != model.VPNStateRunning {
+		t.Fatalf("expected running direct session, got %q", session.State)
+	}
+	*h.notifications = nil
+
+	stopped, err := h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID:       session.SessionID,
+		Action:          model.VPNActionStatus,
+		Role:            model.VPNRoleEntry,
+		State:           model.VPNStateRunning,
+		TrafficReported: true,
+		UploadBytes:     11,
+	})
+	if err != nil {
+		t.Fatalf("direct traffic status should stop without returning error: %v", err)
+	}
+	if stopped.State != model.VPNStateStopped {
+		t.Fatalf("direct traffic limit must stop session, got %q", stopped.State)
+	}
+	if !strings.Contains(stopped.LastError, "upload traffic limit exceeded") {
+		t.Fatalf("stop reason mismatch: %q", stopped.LastError)
+	}
+	if len(*h.notifications) != 1 || !strings.Contains((*h.notifications)[0].message, "已因流量超限停止") {
+		t.Fatalf("direct traffic limit must notify stop, got %#v", *h.notifications)
+	}
+	_, entryStopReq := readVPNTask(t, h.entryStream)
+	_, exitStopReq := readVPNTask(t, h.exitStream)
+	if entryStopReq.Action != model.VPNActionStop || exitStopReq.Action != model.VPNActionStop {
+		t.Fatalf("direct traffic limit must dispatch cleanup stops, got entry=%+v exit=%+v", entryStopReq, exitStopReq)
+	}
+}
+
 func TestVPNPolicyWithoutNotificationGroupDoesNotSendNotifications(t *testing.T) {
 	h := newVPNHarness(t)
 	actor := VPNActor{UserID: 100, Role: model.RoleMember}

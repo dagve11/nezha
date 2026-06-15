@@ -114,6 +114,10 @@ type Host struct {
 	VPNAllowTun         bool     `json:"vpn_allow_tun,omitempty"`
 	VPNCoreVersion      string   `json:"vpn_core_version,omitempty"`
 	VPNLastError        string   `json:"vpn_last_error,omitempty"`
+	VPNDirectEnabled    bool     `json:"vpn_direct_enabled,omitempty"`
+	VPNDirectListenPort uint32   `json:"vpn_direct_listen_port,omitempty"`
+	VPNDirectAdvertise  string   `json:"vpn_direct_advertise,omitempty"`
+	VPNDirectCertSHA256 string   `json:"vpn_direct_cert_sha256,omitempty"`
 }
 
 func (h *Host) PB() *pb.Host {
@@ -134,6 +138,10 @@ func (h *Host) PB() *pb.Host {
 		VpnAllowTun:         h.VPNAllowTun,
 		VpnCoreVersion:      h.VPNCoreVersion,
 		VpnLastError:        h.VPNLastError,
+		VpnDirectEnabled:    h.VPNDirectEnabled,
+		VpnDirectListenPort: h.VPNDirectListenPort,
+		VpnDirectAdvertise:  h.VPNDirectAdvertise,
+		VpnDirectCertSha256: h.VPNDirectCertSHA256,
 	}
 }
 
@@ -154,6 +162,9 @@ func (h *Host) Filter() *Host {
 		VPNAllowTun:         h.VPNAllowTun,
 		VPNCoreVersion:      h.VPNCoreVersion,
 		VPNLastError:        h.VPNLastError,
+		VPNDirectEnabled:    h.VPNDirectEnabled,
+		VPNDirectListenPort: h.VPNDirectListenPort,
+		VPNDirectAdvertise:  h.VPNDirectAdvertise,
 	}
 }
 
@@ -178,6 +189,10 @@ func PB2Host(h *pb.Host) Host {
 		VPNAllowTun:         h.GetVpnAllowTun(),
 		VPNCoreVersion:      h.GetVpnCoreVersion(),
 		VPNLastError:        h.GetVpnLastError(),
+		VPNDirectEnabled:    h.GetVpnDirectEnabled(),
+		VPNDirectListenPort: h.GetVpnDirectListenPort(),
+		VPNDirectAdvertise:  h.GetVpnDirectAdvertise(),
+		VPNDirectCertSHA256: h.GetVpnDirectCertSha256(),
 	}
 }
 

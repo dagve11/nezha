@@ -136,6 +136,7 @@ type VPNControlResult struct {
 	SystemProxyExpected string   `json:"system_proxy_expected,omitempty"`
 	TunStatus           string   `json:"tun_status,omitempty"`
 	TunInterface        string   `json:"tun_interface,omitempty"`
+	TrafficReported     bool     `json:"traffic_reported,omitempty"`
 	UploadBytes         uint64   `json:"upload_bytes,omitempty"`
 	DownloadBytes       uint64   `json:"download_bytes,omitempty"`
 	ActiveConns         uint32   `json:"active_conns,omitempty"`

@@ -29,6 +29,10 @@ message Host {
   bool vpn_allow_tun = 14;
   string vpn_core_version = 15;
   string vpn_last_error = 16;
+  bool vpn_direct_enabled = 17;
+  uint32 vpn_direct_listen_port = 18;
+  string vpn_direct_advertise = 19;
+  string vpn_direct_cert_sha256 = 20;
 }
 
 message State {
