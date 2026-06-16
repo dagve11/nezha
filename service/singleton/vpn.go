@@ -29,6 +29,7 @@ const (
 	defaultVPNCoreCNDownloadBaseURL = "https://gitee.com/AGZZY11/sb-core/releases/download/V1.0.0"
 	defaultVPNCoreManifestURL       = defaultVPNCoreDownloadBaseURL + "/manifest.json"
 	defaultVPNCoreCNManifestURL     = defaultVPNCoreCNDownloadBaseURL + "/manifest.json"
+	defaultVPNPolicyCoreSessionID   = "core_policy"
 )
 
 var (
@@ -3522,15 +3523,19 @@ func shouldAutoRestartVPNSession(policy *model.AgentVPNPolicy, session *model.Ag
 	return session.State == model.VPNStateLost || session.State == model.VPNStateFailed
 }
 
-func policyCoreSessionID(policyID uint64) string {
-	return fmt.Sprintf("core_policy_%d", policyID)
+func policyCoreSessionID(_ uint64) string {
+	return defaultVPNPolicyCoreSessionID
 }
 
 func isPolicyCoreSessionID(sessionID string) bool {
-	if !strings.HasPrefix(sessionID, "core_policy_") {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == defaultVPNPolicyCoreSessionID {
+		return true
+	}
+	if !strings.HasPrefix(sessionID, defaultVPNPolicyCoreSessionID+"_") {
 		return false
 	}
-	_, err := strconv.ParseUint(strings.TrimPrefix(sessionID, "core_policy_"), 10, 64)
+	_, err := strconv.ParseUint(strings.TrimPrefix(sessionID, defaultVPNPolicyCoreSessionID+"_"), 10, 64)
 	return err == nil
 }
 
