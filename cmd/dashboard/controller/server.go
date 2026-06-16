@@ -38,6 +38,11 @@ func listServer(c *gin.Context) ([]*model.Server, error) {
 	if err := copier.Copy(&ssl, &slist); err != nil {
 		return nil, err
 	}
+	for i, server := range slist {
+		if i < len(ssl) && server != nil {
+			ssl[i].Online = server.GetTaskStream() != nil
+		}
+	}
 	return ssl, nil
 }
 

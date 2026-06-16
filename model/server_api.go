@@ -12,6 +12,7 @@ type StreamServer struct {
 	State       *HostState `json:"state,omitempty"`
 	CountryCode string     `json:"country_code,omitempty"`
 	LastActive  time.Time  `json:"last_active,omitempty"`
+	Online      bool       `json:"online"`
 }
 
 type StreamServerData struct {

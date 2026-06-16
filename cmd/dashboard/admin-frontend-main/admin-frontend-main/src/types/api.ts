@@ -562,6 +562,7 @@ export interface ModelServer {
     id: number
     last_active: string
     name: string
+    online: boolean
     /** 管理员可见备注 */
     note: string
     override_ddns_domains?: Record<string, string[]>
@@ -765,6 +766,7 @@ export interface ModelStreamServer {
     id: number
     last_active: string
     name: string
+    online: boolean
     /** 公开备注，只第一个数据包有值 */
     public_note: string
     state: ModelHostState

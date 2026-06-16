@@ -32,6 +32,7 @@ type Server struct {
 	State      *HostState `gorm:"-" json:"state,omitempty"`
 	GeoIP      *GeoIP     `gorm:"-" json:"geoip,omitempty"`
 	LastActive time.Time  `gorm:"-" json:"last_active,omitempty"`
+	Online     bool       `gorm:"-" json:"online"`
 
 	// taskStream MUST be accessed only via SetTaskStream / GetTaskStream. Direct
 	// field access from outside this file races with the gRPC RequestTask

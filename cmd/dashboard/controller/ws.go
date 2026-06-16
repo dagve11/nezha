@@ -212,6 +212,7 @@ func filterServersForViewer(servers []*model.Server, viewerUserID uint64, viewer
 			State:        server.State,
 			CountryCode:  countryCode,
 			LastActive:   server.LastActive,
+			Online:       server.GetTaskStream() != nil,
 		})
 	}
 	return out
