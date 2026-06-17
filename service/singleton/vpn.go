@@ -21,6 +21,7 @@ import (
 	"github.com/nezhahq/nezha/model"
 	"github.com/nezhahq/nezha/pkg/utils"
 	pb "github.com/nezhahq/nezha/proto"
+	"gorm.io/gorm"
 )
 
 const (
@@ -391,6 +392,11 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 	if err != nil {
 		return nil, err
 	}
+	if existing, err := v.sessionForPolicy(policy.ID); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return nil, fmt.Errorf("policy %d already has session %s; restart or delete the existing session", policy.ID, existing.SessionID)
+	}
 	if err := validateVPNPolicyRuntime(policy); err != nil {
 		v.recordStartSessionPreflightFailure(actor, policy, err, "policy_validation")
 		return nil, err
@@ -423,11 +429,7 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 		v.recordStartSessionPreflightFailure(actor, policy, err, "token_generation")
 		return nil, err
 	}
-	sessionID, err := VPNIDGenerator("vpn_")
-	if err != nil {
-		v.recordStartSessionPreflightFailure(actor, policy, err, "session_id_generation")
-		return nil, err
-	}
+	sessionID := generateVPNSessionID(policy)
 	entryStreamID, err := VPNIDGenerator("vpn_entry_")
 	if err != nil {
 		v.recordStartSessionPreflightFailure(actor, policy, err, "entry_stream_id_generation")
@@ -629,7 +631,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		agentCleanupLogs := vpnAgentCleanupLogSummary(result.Logs)
 		addVPNAuditAgentCleanupDetail(auditDetail, agentCleanupLogs)
 		_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStopSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session stopped by agent", auditDetail)
-		message := vpnNotificationBase("[Agent VPN] 已停止", policy, &session, "")
+		message := vpnNotificationBase("[代理隧道] 已停止", policy, &session, "")
 		if agentCleanupLogs != "" {
 			message += "\nAgent 清理日志: " + agentCleanupLogs
 		}
@@ -899,11 +901,22 @@ func (v *VPNClass) StopSession(actor VPNActor, sessionID string) (*model.AgentVP
 		}
 	}
 	_ = v.writeAudit(actor, model.VPNAuditActionStopSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session stopped", detail)
-	message := vpnNotificationBase("[Agent VPN] 已停止", policy, &session, "")
+	message := vpnNotificationBase("[代理隧道] 已停止", policy, &session, "")
 	if len(stopErrors) > 0 {
 		message += "\n清理下发失败: " + strings.Join(stopErrors, "; ")
 	}
 	sendVPNNotification(policy.NotificationGroupID, message, "")
+	return &session, nil
+}
+
+func (v *VPNClass) sessionForPolicy(policyID uint64) (*model.AgentVPNSession, error) {
+	var session model.AgentVPNSession
+	if err := DB.Where("policy_id = ?", policyID).Order("id DESC").First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	return &session, nil
 }
 
@@ -1172,7 +1185,7 @@ func (v *VPNClass) stopSessionForRelayLimit(session *model.AgentVPNSession, poli
 		detail["cleanup_errors"] = strings.Join(cleanupErrors, "; ")
 	}
 	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStopSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, auditMessage, detail)
-	message := vpnNotificationBase("[Agent VPN] "+notificationTitle, policy, session, reason)
+	message := vpnNotificationBase("[代理隧道] "+notificationTitle, policy, session, reason)
 	message += "\n限制: " + limitDescription
 	message += "\n实际: " + actualDescription
 	if len(cleanupErrors) > 0 {
@@ -1229,7 +1242,7 @@ func (v *VPNClass) HandleRelayClosed(sessionID string, uploadBytes uint64, downl
 		detail["cleanup_errors"] = strings.Join(cleanupErrors, "; ")
 	}
 	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, message, detail)
-	notification := vpnNotificationBase("[Agent VPN] 异常停止", policy, session, message)
+	notification := vpnNotificationBase("[代理隧道] 异常停止", policy, session, message)
 	if len(cleanupErrors) > 0 {
 		notification += "\n清理下发失败: " + strings.Join(cleanupErrors, "; ")
 	}
@@ -1444,7 +1457,7 @@ func (v *VPNClass) recordLateAgentCleanupResult(policy *model.AgentVPNPolicy, se
 	}
 	addVPNAuditAgentCleanupDetail(detail, agentCleanupLogs)
 	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStopSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, "late agent cleanup result", detail)
-	message := fmt.Sprintf("[Agent VPN] 停止清理结果\n入口节点: %s\n出口节点: %s\n角色: %s\nSession: %s\nAgent 清理日志: %s",
+	message := fmt.Sprintf("[代理隧道] 停止清理结果\n入口节点: %s\n出口节点: %s\n角色: %s\nSession: %s\nAgent 清理日志: %s",
 		serverName(session.EntryServerID),
 		serverName(session.ExitServerID),
 		result.Role,
@@ -1525,7 +1538,7 @@ func (v *VPNClass) ExpireSessions(now time.Time) error {
 
 func (v *VPNClass) OnAgentReconnect(serverID uint64) error {
 	var sessions []model.AgentVPNSession
-	if err := DB.Where("state IN ? AND (entry_server_id = ? OR exit_server_id = ?)", []string{model.VPNStateStarting, model.VPNStateRunning, model.VPNStateUnknown, model.VPNStateLost, model.VPNStateFailed}, serverID, serverID).Find(&sessions).Error; err != nil {
+	if err := DB.Where("state IN ? AND (entry_server_id = ? OR exit_server_id = ?)", []string{model.VPNStateStarting, model.VPNStateRunning, model.VPNStateUnknown, model.VPNStateLost}, serverID, serverID).Find(&sessions).Error; err != nil {
 		return err
 	}
 	for i := range sessions {
@@ -1547,7 +1560,12 @@ func (v *VPNClass) OnAgentReconnect(serverID uint64) error {
 		}
 		if shouldAutoRestartVPNSession(policy, session, now) {
 			if err := v.restartExistingSession(session, policy); err != nil {
-				_ = v.markSessionLost(session, policy, model.VPNRoleEntry, err.Error(), "auto restart")
+				role := vpnRoleFromError(err, model.VPNRoleEntry)
+				if isVPNUnavailableFault(err) {
+					_ = v.markSessionFailed(session, policy, role, err.Error(), "auto restart")
+				} else {
+					_ = v.markSessionLost(session, policy, role, err.Error(), "auto restart")
+				}
 			}
 			continue
 		}
@@ -1915,7 +1933,7 @@ func (v *VPNClass) expireSession(session *model.AgentVPNSession, now time.Time) 
 		}
 	}
 	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStopSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session expired", detail)
-	message := vpnNotificationBase("[Agent VPN] 已过期停止", policy, session, "session expired")
+	message := vpnNotificationBase("[代理隧道] 已过期停止", policy, session, "session expired")
 	if len(stopErrors) > 0 {
 		message += "\n清理下发失败: " + strings.Join(stopErrors, "; ")
 	}
@@ -2268,8 +2286,54 @@ func (v *VPNClass) markSessionLost(session *model.AgentVPNSession, policy *model
 	return nil
 }
 
+func (v *VPNClass) markSessionFailed(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, role string, reason string, source string) error {
+	if session == nil {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "agent runtime unavailable"
+	}
+	if vpnFailedAlreadyRecorded(session, role, reason, source) {
+		return nil
+	}
+	if role == model.VPNRoleEntry {
+		session.EntryState = model.VPNStateFailed
+	} else if role == model.VPNRoleExit {
+		session.ExitState = model.VPNStateFailed
+	}
+	session.State = model.VPNStateFailed
+	session.LastError = reason
+	if err := DB.Save(session).Error; err != nil {
+		return err
+	}
+	v.finalizeVPNSessionRuntime(session.SessionID)
+	detail := map[string]string{
+		"role":   role,
+		"source": source,
+		"reason": reason,
+	}
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, reason, detail)
+	if policy != nil {
+		v.notifyRuntimeFailure(policy, session, nil, "")
+	}
+	return nil
+}
+
 func vpnLostAlreadyRecorded(session *model.AgentVPNSession, role string, reason string, source string) bool {
 	if session == nil || session.State != model.VPNStateLost || session.LastError != reason {
+		return false
+	}
+	var audit model.AgentVPNAuditLog
+	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionStatus, session.SessionID, false).
+		Order("id DESC").
+		First(&audit).Error; err != nil {
+		return false
+	}
+	return audit.Detail["role"] == role && audit.Detail["source"] == source && audit.Detail["reason"] == reason
+}
+
+func vpnFailedAlreadyRecorded(session *model.AgentVPNSession, role string, reason string, source string) bool {
+	if session == nil || session.State != model.VPNStateFailed || session.LastError != reason {
 		return false
 	}
 	var audit model.AgentVPNAuditLog
@@ -2303,7 +2367,7 @@ func canHandleVPNResultWithoutPolicy(result model.VPNControlResult) bool {
 }
 
 func (v *VPNClass) notifyStarted(policy *model.AgentVPNPolicy, session *model.AgentVPNSession) {
-	message := vpnNotificationBase("[Agent VPN] 已启动", policy, session, "")
+	message := vpnNotificationBase("[代理隧道] 已启动", policy, session, "")
 	if summary := vpnEgressProbeSummary(v.SessionLogs(session.SessionID)); summary != "" {
 		message += "\n出口探测: " + summary
 	}
@@ -2311,7 +2375,7 @@ func (v *VPNClass) notifyStarted(policy *model.AgentVPNPolicy, session *model.Ag
 }
 
 func (v *VPNClass) notifyRestarted(policy *model.AgentVPNPolicy, session *model.AgentVPNSession) {
-	message := vpnNotificationBase("[Agent VPN] 已重启", policy, session, "")
+	message := vpnNotificationBase("[代理隧道] 已重启", policy, session, "")
 	if summary := vpnEgressProbeSummary(v.SessionLogs(session.SessionID)); summary != "" {
 		message += "\n出口探测: " + summary
 	}
@@ -2376,13 +2440,13 @@ func vpnEgressProbeSummary(logs []string) string {
 }
 
 func (v *VPNClass) notifyLost(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, role string, reason string) {
-	message := vpnNotificationBase("[Agent VPN] 已失联", policy, session, reason)
+	message := vpnNotificationBase("[代理隧道] 已失联", policy, session, reason)
 	message += "\n角色: " + role
 	sendVPNNotification(policy.NotificationGroupID, message, "")
 }
 
 func (v *VPNClass) notifyFailure(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, agentCleanupLogs string) {
-	message := vpnNotificationBase("[Agent VPN] 启动失败", policy, session, session.LastError)
+	message := vpnNotificationBase("[代理隧道] 启动失败", policy, session, session.LastError)
 	if strings.TrimSpace(agentCleanupLogs) != "" {
 		message += "\nAgent 清理日志: " + agentCleanupLogs
 	}
@@ -2398,7 +2462,7 @@ func (v *VPNClass) notifyLifecycleFailure(policy *model.AgentVPNPolicy, session 
 }
 
 func (v *VPNClass) notifyRestartFailure(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, agentCleanupLogs string) {
-	message := vpnNotificationBase("[Agent VPN] 重启失败", policy, session, session.LastError)
+	message := vpnNotificationBase("[代理隧道] 重启失败", policy, session, session.LastError)
 	if strings.TrimSpace(agentCleanupLogs) != "" {
 		message += "\nAgent 清理日志: " + agentCleanupLogs
 	}
@@ -2406,7 +2470,7 @@ func (v *VPNClass) notifyRestartFailure(policy *model.AgentVPNPolicy, session *m
 }
 
 func (v *VPNClass) notifyRuntimeFailure(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, cleanupErrors []string, agentCleanupLogs string) {
-	message := vpnNotificationBase("[Agent VPN] 异常停止", policy, session, session.LastError)
+	message := vpnNotificationBase("[代理隧道] 异常停止", policy, session, session.LastError)
 	if len(cleanupErrors) > 0 {
 		message += "\n清理下发失败: " + strings.Join(cleanupErrors, "; ")
 	}
@@ -2428,7 +2492,7 @@ func (v *VPNClass) recordStartSessionPreflightFailure(actor VPNActor, policy *mo
 		detail["stage"] = stage
 	}
 	_ = v.writeAudit(actor, model.VPNAuditActionStartSession, "", policy.EntryServerID, policy.ExitServerID, false, cause.Error(), detail)
-	sendVPNNotification(policy.NotificationGroupID, vpnPolicyFailureNotification("[Agent VPN] 启动失败", policy, cause.Error()), "")
+	sendVPNNotification(policy.NotificationGroupID, vpnPolicyFailureNotification("[代理隧道] 启动失败", policy, cause.Error()), "")
 }
 
 func (v *VPNClass) recordRestartSessionPreflightFailure(actor VPNActor, session *model.AgentVPNSession, policy *model.AgentVPNPolicy, cause error, stage string, action string) {
@@ -2697,10 +2761,10 @@ func validateVPNServerCapabilities(policy *model.AgentVPNPolicy, entry *model.Se
 		return err
 	}
 	if policy.Mode == model.VPNModeSystemProxy && !entry.Host.VPNAllowSystemProxy {
-		return fmt.Errorf("entry server %d does not allow Agent VPN system_proxy mode", entry.ID)
+		return fmt.Errorf("entry server %d does not allow proxy tunnel system_proxy mode", entry.ID)
 	}
 	if isVPNTunMode(policy.Mode) && !entry.Host.VPNAllowTun {
-		return fmt.Errorf("entry server %d does not allow Agent VPN TUN mode", entry.ID)
+		return fmt.Errorf("entry server %d does not allow proxy tunnel TUN mode", entry.ID)
 	}
 	if err := validateVPNRoleCapability(model.VPNRoleExit, exit); err != nil {
 		return err
@@ -2925,7 +2989,7 @@ func validateVPNRoleCapability(role string, server *model.Server) error {
 		return fmt.Errorf("%s server not found", role)
 	}
 	if server.Host == nil || !server.Host.VPNEnabled {
-		return fmt.Errorf("%s server %d has not reported Agent VPN capability", role, server.ID)
+		return fmt.Errorf("%s server %d has not reported proxy tunnel capability", role, server.ID)
 	}
 	return nil
 }
@@ -3262,9 +3326,54 @@ func vpnPolicyFromForm(userID uint64, form model.AgentVPNPolicyForm) *model.Agen
 		CoreSHA256:              strings.TrimSpace(form.CoreSHA256),
 	}
 	if policy.Name == "" {
-		policy.Name = fmt.Sprintf("VPN %d -> %d", policy.EntryServerID, policy.ExitServerID)
+		policy.Name = fmt.Sprintf("Proxy Tunnel %d -> %d", policy.EntryServerID, policy.ExitServerID)
 	}
 	return policy
+}
+
+func generateVPNSessionID(policy *model.AgentVPNPolicy) string {
+	return "pt_" + vpnSessionNameSlug(policy)
+}
+
+func vpnSessionNameSlug(policy *model.AgentVPNPolicy) string {
+	if policy == nil {
+		return "session"
+	}
+	slug := vpnSafeIDSegment(policy.Name, 48)
+	if slug == "" {
+		if policy.ID > 0 {
+			return fmt.Sprintf("policy-%d", policy.ID)
+		}
+		return "session"
+	}
+	return slug
+}
+
+func vpnSafeIDSegment(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || maxRunes <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	lastSeparator := false
+	written := 0
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+			lastSeparator = false
+			written++
+		} else if r == '-' || r == '_' || unicode.IsSpace(r) {
+			if written > 0 && !lastSeparator {
+				b.WriteByte('-')
+				lastSeparator = true
+				written++
+			}
+		}
+		if written >= maxRunes {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func buildVPNCoreSpec(policy *model.AgentVPNPolicy) model.VPNCoreSpec {
@@ -3520,7 +3629,34 @@ func shouldAutoRestartVPNSession(policy *model.AgentVPNPolicy, session *model.Ag
 	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
 		return false
 	}
-	return session.State == model.VPNStateLost || session.State == model.VPNStateFailed
+	return session.State == model.VPNStateLost
+}
+
+func isVPNUnavailableFault(err error) bool {
+	if err == nil {
+		return false
+	}
+	reason := err.Error()
+	return strings.Contains(reason, "has not reported proxy tunnel capability") ||
+		strings.Contains(reason, "does not allow proxy tunnel") ||
+		strings.Contains(reason, "unsupported vpn mode") ||
+		strings.Contains(reason, "unsupported vpn rule mode") ||
+		strings.Contains(reason, "unsupported vpn relay mode")
+}
+
+func vpnRoleFromError(err error, fallback string) string {
+	if err == nil {
+		return fallback
+	}
+	reason := strings.TrimSpace(err.Error())
+	switch {
+	case strings.HasPrefix(reason, "exit server "):
+		return model.VPNRoleExit
+	case strings.HasPrefix(reason, "entry server "):
+		return model.VPNRoleEntry
+	default:
+		return fallback
+	}
 }
 
 func policyCoreSessionID(_ uint64) string {

@@ -145,18 +145,16 @@ func newVPNHarness(t *testing.T) *vpnHarness {
 		return token, nil
 	}
 	ids := []string{
-		"vpn_session_1",
-		"vpn_entry_stream_1",
-		"vpn_exit_stream_1",
-		"vpn_session_2",
-		"vpn_entry_stream_2",
-		"vpn_exit_stream_2",
+		"stream_1",
+		"stream_1",
+		"stream_2",
+		"stream_2",
 	}
 	idIndex := 0
 	VPNIDGenerator = func(prefix string) (string, error) {
 		id := ids[idIndex%len(ids)]
 		idIndex++
-		return id, nil
+		return prefix + id, nil
 	}
 
 	notifications := make([]vpnNotificationCapture, 0)
@@ -582,7 +580,7 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 	if notification.groupID != policy.NotificationGroupID {
 		t.Fatalf("expected notification group %d, got %d", policy.NotificationGroupID, notification.groupID)
 	}
-	if !strings.Contains(notification.message, "[Agent VPN] 已启动") || !strings.Contains(notification.message, "入口节点: entry-cn") || !strings.Contains(notification.message, "出口节点: exit-jp") {
+	if !strings.Contains(notification.message, "[代理隧道] 已启动") || !strings.Contains(notification.message, "入口节点: entry-cn") || !strings.Contains(notification.message, "出口节点: exit-jp") {
 		t.Fatalf("notification content is incomplete: %q", notification.message)
 	}
 	for _, want := range []string{
@@ -605,6 +603,34 @@ func TestVPNStartSessionStagesExitBeforeEntry(t *testing.T) {
 	}
 	if audit.Detail["egress_probe"] != "observed_ip=198.51.100.20 expected=198.51.100.20 match=true" {
 		t.Fatalf("start success audit must persist egress probe summary, got detail=%#v", audit.Detail)
+	}
+}
+
+func TestVPNStartSessionRejectsDuplicatePolicySession(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+
+	first, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start first session: %v", err)
+	}
+	second, err := h.vpn.StartSession(actor, policy.ID)
+	if err == nil {
+		t.Fatal("second start must reject an existing policy session")
+	}
+	if second != nil {
+		t.Fatalf("second start must not return a new session, got %#v", second)
+	}
+	if !strings.Contains(err.Error(), first.SessionID) {
+		t.Fatalf("duplicate policy session error must include existing session id, got %q", err.Error())
+	}
+	var count int64
+	if err := DB.Model(&model.AgentVPNSession{}).Where("policy_id = ?", policy.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("policy must have exactly one session, got %d", count)
 	}
 }
 
@@ -940,7 +966,7 @@ func TestVPNStartSessionRejectsServersWithoutReportedCapabilities(t *testing.T) 
 			mutate: func(h *vpnHarness) {
 				h.mustServer(1).Host = nil
 			},
-			wantErr: "entry server 1 has not reported Agent VPN capability",
+			wantErr: "entry server 1 has not reported proxy tunnel capability",
 		},
 		{
 			name: "entry disallows system proxy mode",
@@ -957,7 +983,7 @@ func TestVPNStartSessionRejectsServersWithoutReportedCapabilities(t *testing.T) 
 			mutate: func(h *vpnHarness) {
 				h.mustServer(1).Host.VPNAllowSystemProxy = false
 			},
-			wantErr: "entry server 1 does not allow Agent VPN system_proxy mode",
+			wantErr: "entry server 1 does not allow proxy tunnel system_proxy mode",
 		},
 		{
 			name: "entry disallows TUN mode",
@@ -974,7 +1000,7 @@ func TestVPNStartSessionRejectsServersWithoutReportedCapabilities(t *testing.T) 
 			mutate: func(h *vpnHarness) {
 				h.mustServer(1).Host.VPNAllowTun = false
 			},
-			wantErr: "entry server 1 does not allow Agent VPN TUN mode",
+			wantErr: "entry server 1 does not allow proxy tunnel TUN mode",
 		},
 		{
 			name: "exit VPN disabled",
@@ -991,7 +1017,7 @@ func TestVPNStartSessionRejectsServersWithoutReportedCapabilities(t *testing.T) 
 			mutate: func(h *vpnHarness) {
 				h.mustServer(2).Host.VPNEnabled = false
 			},
-			wantErr: "exit server 2 has not reported Agent VPN capability",
+			wantErr: "exit server 2 has not reported proxy tunnel capability",
 		},
 	}
 
@@ -1009,7 +1035,7 @@ func TestVPNStartSessionRejectsServersWithoutReportedCapabilities(t *testing.T) 
 
 			session, err := h.vpn.StartSession(actor, policy.ID)
 			if err == nil {
-				t.Fatal("expected start session to reject unsupported Agent VPN capability")
+				t.Fatal("expected start session to reject unsupported proxy tunnel capability")
 			}
 			if session != nil {
 				t.Fatalf("unsupported capability must fail before creating a session, got %#v", session)
@@ -1036,7 +1062,7 @@ func TestVPNStartSessionRejectsServersWithoutReportedCapabilities(t *testing.T) 
 			if notification.groupID != policy.NotificationGroupID {
 				t.Fatalf("failure notification group mismatch: want %d got %d", policy.NotificationGroupID, notification.groupID)
 			}
-			if !strings.Contains(notification.message, "[Agent VPN] 启动失败") || !strings.Contains(notification.message, tc.wantErr) {
+			if !strings.Contains(notification.message, "[代理隧道] 启动失败") || !strings.Contains(notification.message, tc.wantErr) {
 				t.Fatalf("failure notification must include the capability error, got %q", notification.message)
 			}
 			var audit model.AgentVPNAuditLog
@@ -2203,7 +2229,7 @@ func TestVPNFailedControlResultClosesRelay(t *testing.T) {
 	if notification.groupID != policy.NotificationGroupID {
 		t.Fatalf("failure notification group mismatch: want %d got %d", policy.NotificationGroupID, notification.groupID)
 	}
-	if !strings.Contains(notification.message, "[Agent VPN] 异常停止") ||
+	if !strings.Contains(notification.message, "[代理隧道] 异常停止") ||
 		!strings.Contains(notification.message, "入口节点: entry-cn") ||
 		!strings.Contains(notification.message, "出口节点: exit-jp") {
 		t.Fatalf("failure notification content is incomplete: %q", notification.message)
@@ -2410,7 +2436,7 @@ func TestVPNStoppedControlResultFinalizesRuntimeAndAudits(t *testing.T) {
 	if _, err := h.vpn.tokenForSession(stopped); err == nil {
 		t.Fatal("stopped control result must delete the session token")
 	}
-	if len(*h.notifications) != 1 || !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 已停止") {
+	if len(*h.notifications) != 1 || !strings.Contains((*h.notifications)[0].message, "[代理隧道] 已停止") {
 		t.Fatalf("stopped control result must notify stop, got %#v", *h.notifications)
 	}
 	for _, want := range []string{
@@ -2512,7 +2538,7 @@ func TestVPNStoppedSessionIgnoresLateControlResultButKeepsLogs(t *testing.T) {
 		t.Fatalf("late cleanup result must send one cleanup notification, before=%d after=%d notifications=%#v", notifications, len(*h.notifications), *h.notifications)
 	}
 	cleanupNotification := (*h.notifications)[len(*h.notifications)-1].message
-	if !strings.Contains(cleanupNotification, "[Agent VPN] 停止清理结果") ||
+	if !strings.Contains(cleanupNotification, "[代理隧道] 停止清理结果") ||
 		!strings.Contains(cleanupNotification, "system_proxy_restore=ok") ||
 		!strings.Contains(cleanupNotification, "tun_restore=failed: route restore failed") ||
 		!strings.Contains(cleanupNotification, "state=kept-for-restore-retry") {
@@ -3963,7 +3989,7 @@ func TestVPNStopSessionSendsEntryThenExitAndMarksStopped(t *testing.T) {
 		t.Fatalf("manual stop notification group mismatch: want %d got %d", policy.NotificationGroupID, notification.groupID)
 	}
 	for _, want := range []string{
-		"[Agent VPN] 已停止",
+		"[代理隧道] 已停止",
 		"策略: GitHub Split",
 		"入口节点: entry-cn",
 		"出口节点: exit-jp",
@@ -4280,7 +4306,7 @@ func TestVPNRestartSessionCompletionAuditsAndNotifiesRestart(t *testing.T) {
 	if notification.groupID != policy.NotificationGroupID {
 		t.Fatalf("restart notification group mismatch: want %d got %d", policy.NotificationGroupID, notification.groupID)
 	}
-	if !strings.Contains(notification.message, "[Agent VPN] 已重启") ||
+	if !strings.Contains(notification.message, "[代理隧道] 已重启") ||
 		!strings.Contains(notification.message, "入口节点: entry-cn") ||
 		!strings.Contains(notification.message, "出口节点: exit-jp") ||
 		!strings.Contains(notification.message, "Session: "+session.SessionID) {
@@ -4340,7 +4366,7 @@ func TestVPNRestartSessionEntryDispatchFailureAuditsAndNotifiesRestartFailure(t 
 	if len(*h.notifications) != 1 {
 		t.Fatalf("entry restart dispatch failure must send one restart failure notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, "entry restart stream closed") ||
 		!strings.Contains((*h.notifications)[0].message, "Session: "+session.SessionID) {
 		t.Fatalf("restart failure notification content mismatch: %q", (*h.notifications)[0].message)
@@ -4419,7 +4445,7 @@ func TestVPNRestartSessionExitDispatchFailureAuditsAndNotifiesRestartFailure(t *
 	if len(*h.notifications) != 1 {
 		t.Fatalf("exit restart dispatch failure must send one restart failure notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, "exit restart stream closed") ||
 		!strings.Contains((*h.notifications)[0].message, "Session: "+session.SessionID) {
 		t.Fatalf("exit restart dispatch failure notification content mismatch: %q", (*h.notifications)[0].message)
@@ -4474,7 +4500,7 @@ func TestVPNRestartSessionAgentFailedAuditsAndNotifiesRestartFailure(t *testing.
 	if len(*h.notifications) != 1 {
 		t.Fatalf("agent restart failure must send one restart failure notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, "entry restart sidecar failed") ||
 		!strings.Contains((*h.notifications)[0].message, "Session: "+session.SessionID) {
 		t.Fatalf("agent restart failure notification content mismatch: %q", (*h.notifications)[0].message)
@@ -4524,7 +4550,7 @@ func TestVPNRestartSessionTokenGenerationFailureAuditsAndNotifiesRestartFailure(
 	if len(*h.notifications) != 1 {
 		t.Fatalf("restart token generation failure must send one notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, "restart token entropy unavailable") {
 		t.Fatalf("restart token generation notification mismatch: %q", (*h.notifications)[0].message)
 	}
@@ -4590,7 +4616,7 @@ func TestVPNRestartSessionStreamIDGenerationFailureAuditsAndNotifiesRestartFailu
 	if len(*h.notifications) != 1 {
 		t.Fatalf("restart stream id generation failure must send one notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, "restart entry stream id unavailable") {
 		t.Fatalf("restart stream id generation notification mismatch: %q", (*h.notifications)[0].message)
 	}
@@ -4643,7 +4669,7 @@ func TestVPNRestartSessionOfflinePreflightAuditsAndNotifiesRestartFailure(t *tes
 	if len(*h.notifications) != 1 {
 		t.Fatalf("offline restart failure must send one notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, "entry server 1 is offline") {
 		t.Fatalf("offline restart failure notification mismatch: %q", (*h.notifications)[0].message)
 	}
@@ -4668,7 +4694,7 @@ func TestVPNRestartSessionCapabilityPreflightAuditsAndNotifiesRestartFailure(t *
 	if restarted == nil || restarted.SessionID != session.SessionID {
 		t.Fatalf("capability restart failure must return original session snapshot, got %#v", restarted)
 	}
-	if !strings.Contains(err.Error(), "entry server 1 does not allow Agent VPN system_proxy mode") {
+	if !strings.Contains(err.Error(), "entry server 1 does not allow proxy tunnel system_proxy mode") {
 		t.Fatalf("error = %q, want capability reason", err.Error())
 	}
 	var stored model.AgentVPNSession
@@ -4687,14 +4713,14 @@ func TestVPNRestartSessionCapabilityPreflightAuditsAndNotifiesRestartFailure(t *
 	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionRestart, session.SessionID, false).Last(&audit).Error; err != nil {
 		t.Fatalf("capability restart failure must write restart failure audit: %v", err)
 	}
-	if audit.Detail["stage"] != "capability_validation" || !strings.Contains(audit.Message, "does not allow Agent VPN system_proxy mode") {
+	if audit.Detail["stage"] != "capability_validation" || !strings.Contains(audit.Message, "does not allow proxy tunnel system_proxy mode") {
 		t.Fatalf("capability restart audit mismatch: message=%q detail=%#v", audit.Message, audit.Detail)
 	}
 	if len(*h.notifications) != 1 {
 		t.Fatalf("capability restart failure must send one notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
-		!strings.Contains((*h.notifications)[0].message, "does not allow Agent VPN system_proxy mode") {
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
+		!strings.Contains((*h.notifications)[0].message, "does not allow proxy tunnel system_proxy mode") {
 		t.Fatalf("capability restart failure notification mismatch: %q", (*h.notifications)[0].message)
 	}
 }
@@ -5693,8 +5719,8 @@ func TestVPNOnAgentReconnectAutoRestartPreflightFailureDoesNotSendManualRestartF
 	if len(*h.notifications) != 1 {
 		t.Fatalf("auto restart preflight failure must send only lost notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 已失联") ||
-		strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 已失联") ||
+		strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, "auto restart token entropy unavailable") {
 		t.Fatalf("auto restart preflight notification should be lost-only, got %q", (*h.notifications)[0].message)
 	}
@@ -5786,19 +5812,19 @@ func TestVPNOnAgentReconnectAutoRestartLegacyInvalidPolicyDoesNotSendManualResta
 	if err := DB.First(&stored, session.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != model.VPNStateLost {
-		t.Fatalf("auto restart invalid legacy policy must leave session lost, got %q", stored.State)
+	if stored.State != model.VPNStateFailed {
+		t.Fatalf("auto restart invalid legacy policy must mark session failed, got %q", stored.State)
 	}
 	if !strings.Contains(stored.LastError, `unsupported vpn mode "wireguard"`) {
-		t.Fatalf("lost state must persist invalid policy reason, got %q", stored.LastError)
+		t.Fatalf("failed state must persist invalid policy reason, got %q", stored.LastError)
 	}
 	if len(*h.notifications) != 1 {
-		t.Fatalf("auto restart invalid policy must send one lost notification, got %#v", *h.notifications)
+		t.Fatalf("auto restart invalid policy must send one failure notification, got %#v", *h.notifications)
 	}
-	if !strings.Contains((*h.notifications)[0].message, "[Agent VPN] 已失联") ||
-		strings.Contains((*h.notifications)[0].message, "[Agent VPN] 重启失败") ||
+	if !strings.Contains((*h.notifications)[0].message, "[代理隧道] 异常停止") ||
+		strings.Contains((*h.notifications)[0].message, "[代理隧道] 重启失败") ||
 		!strings.Contains((*h.notifications)[0].message, `unsupported vpn mode "wireguard"`) {
-		t.Fatalf("auto restart invalid policy must send lost-only notification, got %q", (*h.notifications)[0].message)
+		t.Fatalf("auto restart invalid policy must send runtime-failure notification, got %q", (*h.notifications)[0].message)
 	}
 	var restartAudit model.AgentVPNAuditLog
 	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionRestart, session.SessionID, false).Last(&restartAudit).Error; err != nil {
@@ -5809,10 +5835,10 @@ func TestVPNOnAgentReconnectAutoRestartLegacyInvalidPolicyDoesNotSendManualResta
 	}
 	var statusAudit model.AgentVPNAuditLog
 	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionStatus, session.SessionID, false).Last(&statusAudit).Error; err != nil {
-		t.Fatalf("auto restart invalid policy must write lost status audit: %v", err)
+		t.Fatalf("auto restart invalid policy must write failed status audit: %v", err)
 	}
 	if statusAudit.Detail["source"] != "auto restart" {
-		t.Fatalf("auto restart invalid policy lost audit detail mismatch: %#v", statusAudit.Detail)
+		t.Fatalf("auto restart invalid policy failed audit detail mismatch: %#v", statusAudit.Detail)
 	}
 	assertNoTask(t, h.entryStream)
 	assertNoTask(t, h.exitStream)
@@ -5866,11 +5892,11 @@ func TestVPNOnAgentReconnectDoesNotAutoRestartWhenAgentCapabilityDisabled(t *tes
 	if err := DB.First(&stored, session.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != model.VPNStateLost {
-		t.Fatalf("unsupported capability must keep auto restart session lost, got %q", stored.State)
+	if stored.State != model.VPNStateFailed {
+		t.Fatalf("unsupported capability must mark auto restart session failed, got %q", stored.State)
 	}
-	if !strings.Contains(stored.LastError, "does not allow Agent VPN system_proxy mode") {
-		t.Fatalf("lost session must keep capability error, got %q", stored.LastError)
+	if !strings.Contains(stored.LastError, "does not allow proxy tunnel system_proxy mode") {
+		t.Fatalf("failed session must keep capability error, got %q", stored.LastError)
 	}
 	if stored.EntryStreamID != "old-entry-stream" || stored.ExitStreamID != "old-exit-stream" {
 		t.Fatalf("blocked auto restart must not allocate fresh relay streams, got entry=%q exit=%q", stored.EntryStreamID, stored.ExitStreamID)
@@ -5885,8 +5911,8 @@ func TestVPNOnAgentReconnectDoesNotAutoRestartWhenAgentCapabilityDisabled(t *tes
 	if notification.groupID != policy.NotificationGroupID {
 		t.Fatalf("blocked auto restart notification group = %d, want %d", notification.groupID, policy.NotificationGroupID)
 	}
-	if !strings.Contains(notification.message, "[Agent VPN] 已失联") ||
-		!strings.Contains(notification.message, "does not allow Agent VPN system_proxy mode") ||
+	if !strings.Contains(notification.message, "[代理隧道] 异常停止") ||
+		!strings.Contains(notification.message, "does not allow proxy tunnel system_proxy mode") ||
 		!strings.Contains(notification.message, session.SessionID) {
 		t.Fatalf("blocked auto restart notification missing context: %q", notification.message)
 	}
@@ -5894,12 +5920,11 @@ func TestVPNOnAgentReconnectDoesNotAutoRestartWhenAgentCapabilityDisabled(t *tes
 		"策略: auto restart blocked by capability",
 		"入口节点: entry-cn",
 		"出口节点: exit-jp",
-		"状态: lost",
+		"状态: failed",
 		"本地代理: SOCKS 127.0.0.1:1080",
 		"上传/下载: 0 B / 0 B",
 		"连接数: 0",
-		"错误原因: entry server 1 does not allow Agent VPN system_proxy mode",
-		"角色: entry",
+		"错误原因: entry server 1 does not allow proxy tunnel system_proxy mode",
 		"时间:",
 	} {
 		if !strings.Contains(notification.message, want) {
@@ -5914,11 +5939,75 @@ func TestVPNOnAgentReconnectDoesNotAutoRestartWhenAgentCapabilityDisabled(t *tes
 	if audit.Success {
 		t.Fatalf("blocked auto restart audit must be failure, got success")
 	}
-	if !strings.Contains(audit.Message, "does not allow Agent VPN system_proxy mode") {
+	if !strings.Contains(audit.Message, "does not allow proxy tunnel system_proxy mode") {
 		t.Fatalf("blocked auto restart audit missing reason: %q", audit.Message)
 	}
 	if !strings.Contains(audit.DetailRaw, "auto restart") {
 		t.Fatalf("blocked auto restart audit detail must include source, got %q", audit.DetailRaw)
+	}
+	assertNoTask(t, h.entryStream)
+	assertNoTask(t, h.exitStream)
+}
+
+func TestVPNOnAgentReconnectDoesNotAutoRestartFailedSession(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "failed sessions stay failed",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+		AutoRestart:         true,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	session := &model.AgentVPNSession{
+		Common:        model.Common{UserID: actor.UserID},
+		PolicyID:      policy.ID,
+		EntryServerID: policy.EntryServerID,
+		ExitServerID:  policy.ExitServerID,
+		SessionID:     "vpn_failed_session",
+		TokenHash:     hashVPNToken("stale-token"),
+		Mode:          policy.Mode,
+		RelayMode:     model.VPNRelayModeDashboard,
+		State:         model.VPNStateFailed,
+		EntryState:    model.VPNStateFailed,
+		ExitState:     model.VPNStateFailed,
+		EntryStreamID: "old-entry-stream",
+		ExitStreamID:  "old-exit-stream",
+		LastError:     "entry server 1 does not allow proxy tunnel system_proxy mode",
+		StartedAt:     time.Now().Add(-time.Minute),
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}
+	if err := DB.Create(session).Error; err != nil {
+		t.Fatal(err)
+	}
+	*h.notifications = nil
+
+	if err := h.vpn.OnAgentReconnect(policy.EntryServerID); err != nil {
+		t.Fatalf("agent reconnect: %v", err)
+	}
+
+	var stored model.AgentVPNSession
+	if err := DB.First(&stored, session.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != model.VPNStateFailed {
+		t.Fatalf("failed session must not auto restart on reconnect, got %q", stored.State)
+	}
+	if stored.EntryStreamID != "old-entry-stream" || stored.ExitStreamID != "old-exit-stream" {
+		t.Fatalf("failed reconnect must not rotate relay streams, got entry=%q exit=%q", stored.EntryStreamID, stored.ExitStreamID)
+	}
+	if len(*h.relayCreates) != 0 || len(*h.relayCloses) != 0 {
+		t.Fatalf("failed reconnect must not touch relay, creates=%#v closes=%#v", *h.relayCreates, *h.relayCloses)
+	}
+	if len(*h.notifications) != 0 {
+		t.Fatalf("failed reconnect must not notify, got %#v", *h.notifications)
 	}
 	assertNoTask(t, h.entryStream)
 	assertNoTask(t, h.exitStream)

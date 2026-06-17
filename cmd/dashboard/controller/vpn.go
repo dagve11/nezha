@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -154,12 +155,12 @@ func startVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 }
 
 func stopVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
-	sessionID := strings.TrimSpace(c.Param("id"))
+	sessionID := vpnSessionIDParam(c)
 	return singleton.VPNShared.StopSession(vpnActorFromContext(c), sessionID)
 }
 
 func deleteVPNSession(c *gin.Context) (any, error) {
-	sessionID := strings.TrimSpace(c.Param("id"))
+	sessionID := vpnSessionIDParam(c)
 	if err := singleton.VPNShared.DeleteSession(vpnActorFromContext(c), sessionID); err != nil {
 		return nil, err
 	}
@@ -167,17 +168,17 @@ func deleteVPNSession(c *gin.Context) (any, error) {
 }
 
 func restartVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
-	sessionID := strings.TrimSpace(c.Param("id"))
+	sessionID := vpnSessionIDParam(c)
 	return singleton.VPNShared.RestartSession(vpnActorFromContext(c), sessionID)
 }
 
 func statusVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
-	sessionID := strings.TrimSpace(c.Param("id"))
+	sessionID := vpnSessionIDParam(c)
 	return singleton.VPNShared.RefreshSessionStatus(vpnActorFromContext(c), sessionID)
 }
 
 func controlVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
-	sessionID := strings.TrimSpace(c.Param("id"))
+	sessionID := vpnSessionIDParam(c)
 	var form model.AgentVPNSessionControlForm
 	if err := c.ShouldBindJSON(&form); err != nil {
 		return nil, err
@@ -186,7 +187,7 @@ func controlVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 }
 
 func vpnSessionStream(c *gin.Context) (any, error) {
-	sessionID := strings.TrimSpace(c.Param("id"))
+	sessionID := vpnSessionIDParam(c)
 	session, err := getPermittedVPNSession(c, sessionID)
 	if err != nil {
 		c.JSON(http.StatusForbidden, newErrorResponse(err))
@@ -384,6 +385,14 @@ func getPermittedVPNSession(c *gin.Context, sessionID string) (*model.AgentVPNSe
 		return nil, singleton.Localizer.ErrorT("permission denied")
 	}
 	return &session, nil
+}
+
+func vpnSessionIDParam(c *gin.Context) string {
+	sessionID := strings.TrimSpace(c.Param("id"))
+	if decoded, err := url.PathUnescape(sessionID); err == nil {
+		return strings.TrimSpace(decoded)
+	}
+	return sessionID
 }
 
 func vpnSessionFrameFromSession(session *model.AgentVPNSession) vpnSessionStreamFrame {
