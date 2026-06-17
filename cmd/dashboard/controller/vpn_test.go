@@ -72,7 +72,7 @@ func setupVPNControllerFixture(t *testing.T) *gin.Context {
 	setControllerVPNServerCapability(t, 2)
 	singleton.VPNShared = singleton.NewVPNClass()
 	singleton.VPNTokenGenerator = func() (string, error) { return "controller-token", nil }
-	ids := []string{"controller_session", "controller_entry_stream", "controller_exit_stream"}
+	ids := []string{"controller_entry_stream", "controller_exit_stream"}
 	idIndex := 0
 	singleton.VPNIDGenerator = func(prefix string) (string, error) {
 		id := ids[idIndex%len(ids)]
@@ -365,7 +365,7 @@ func TestCreateListAndStartVPNPolicyFromController(t *testing.T) {
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	session, err := startVPNSession(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "controller_session", session.SessionID)
+	require.Equal(t, "pt_github-split", session.SessionID)
 	require.Equal(t, model.VPNStateStarting, session.State)
 
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/vpn/session", nil)
