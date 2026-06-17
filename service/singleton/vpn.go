@@ -31,6 +31,7 @@ const (
 	defaultVPNCoreManifestURL       = defaultVPNCoreDownloadBaseURL + "/manifest.json"
 	defaultVPNCoreCNManifestURL     = defaultVPNCoreCNDownloadBaseURL + "/manifest.json"
 	defaultVPNPolicyCoreSessionID   = "core_policy"
+	vpnRuntimeSelfRecoveryMaxTries  = 1
 )
 
 var (
@@ -564,6 +565,46 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			session.LastError = result.LastError
 		}
 		v.appendControlLog(session.SessionID, "session failed by %s agent: %s", result.Role, firstNonEmptyString(session.LastError, result.LastError, "unknown error"))
+		agentCleanupLogs := vpnAgentCleanupLogSummary(result.Logs)
+		selfRecoveryExhausted := false
+		if shouldAttemptVPNRuntimeSelfRecovery(policy, &session, result, wasRunning, time.Now()) {
+			attempts := v.runtimeSelfRecoveryAttempts(session.SessionID)
+			if attempts >= vpnRuntimeSelfRecoveryMaxTries {
+				selfRecoveryExhausted = true
+				v.appendControlLog(session.SessionID, "runtime self recovery exhausted after %d attempt(s); confirming failure", attempts)
+			} else {
+				attempt := attempts + 1
+				auditDetail := vpnFailedRuntimeAuditDetail(result, false, nil)
+				auditDetail["self_recovery"] = "attempted"
+				auditDetail["self_recovery_attempt"] = fmt.Sprint(attempt)
+				auditDetail["self_recovery_max_attempts"] = fmt.Sprint(vpnRuntimeSelfRecoveryMaxTries)
+				addVPNAuditAgentCleanupDetail(auditDetail, agentCleanupLogs)
+				if err := DB.Save(&session).Error; err != nil {
+					return nil, err
+				}
+				_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, auditDetail)
+				v.appendControlLog(session.SessionID, "runtime self recovery attempt %d/%d after %s failure: %s", attempt, vpnRuntimeSelfRecoveryMaxTries, result.Role, firstNonEmptyString(session.LastError, result.LastError, "unknown error"))
+				if err := v.restartExistingSessionWithAction(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, &session, policy, model.VPNActionStart); err != nil {
+					session.State = model.VPNStateFailed
+					if result.Role == model.VPNRoleEntry {
+						session.EntryState = model.VPNStateFailed
+					} else if result.Role == model.VPNRoleExit {
+						session.ExitState = model.VPNStateFailed
+					}
+					session.LastError = "self recovery failed: " + err.Error()
+					_ = DB.Save(&session).Error
+					v.finalizeVPNSessionRuntime(session.SessionID)
+					failDetail := vpnFailedRuntimeAuditDetail(result, false, nil)
+					failDetail["self_recovery"] = "failed"
+					failDetail["self_recovery_attempt"] = fmt.Sprint(attempt)
+					failDetail["self_recovery_error"] = err.Error()
+					addVPNAuditAgentCleanupDetail(failDetail, agentCleanupLogs)
+					_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, failDetail)
+					v.notifyRuntimeFailure(policy, &session, nil, agentCleanupLogs)
+				}
+				return &session, nil
+			}
+		}
 		cleanupDispatched := false
 		cleanupErrors := make([]string, 0, 2)
 		if shouldDispatchVPNFailureCleanup(wasRunning, &session, result) {
@@ -577,12 +618,15 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			return nil, err
 		}
 		auditAction := vpnLifecycleFailureAuditAction(result.Action)
-		agentCleanupLogs := vpnAgentCleanupLogSummary(result.Logs)
 		auditDetail := vpnFailedResultAuditDetail(result, cleanupDispatched, cleanupErrors)
 		addVPNAuditAgentCleanupDetail(auditDetail, agentCleanupLogs)
 		if wasRunning {
 			auditAction = model.VPNAuditActionStatus
 			auditDetail = vpnFailedRuntimeAuditDetail(result, cleanupDispatched, cleanupErrors)
+			if selfRecoveryExhausted {
+				auditDetail["self_recovery"] = "exhausted"
+				auditDetail["self_recovery_max_attempts"] = fmt.Sprint(vpnRuntimeSelfRecoveryMaxTries)
+			}
 			addVPNAuditAgentCleanupDetail(auditDetail, agentCleanupLogs)
 		}
 		_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, auditAction, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, auditDetail)
@@ -1281,6 +1325,39 @@ func shouldDispatchVPNFailureCleanup(wasRunning bool, session *model.AgentVPNSes
 		return true
 	}
 	return wasRunning && result.Role == model.VPNRoleEntry && session.ExitState == model.VPNStateRunning
+}
+
+func shouldAttemptVPNRuntimeSelfRecovery(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, result model.VPNControlResult, wasRunning bool, now time.Time) bool {
+	if policy == nil || session == nil || !policy.AutoRestart || !wasRunning {
+		return false
+	}
+	if result.Action != model.VPNActionStatus || result.State != model.VPNStateFailed {
+		return false
+	}
+	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
+		return false
+	}
+	if result.Role != model.VPNRoleEntry && result.Role != model.VPNRoleExit {
+		return false
+	}
+	return true
+}
+
+func (v *VPNClass) runtimeSelfRecoveryAttempts(sessionID string) int {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0
+	}
+	var count int64
+	if err := DB.Model(&model.AgentVPNAuditLog{}).
+		Where("session_id = ? AND action = ? AND detail_raw LIKE ?", sessionID, model.VPNAuditActionStatus, "%\"self_recovery\":\"attempted\"%").
+		Count(&count).Error; err != nil {
+		return vpnRuntimeSelfRecoveryMaxTries
+	}
+	if count > int64(vpnRuntimeSelfRecoveryMaxTries) {
+		return vpnRuntimeSelfRecoveryMaxTries
+	}
+	return int(count)
 }
 
 func (v *VPNClass) startPreparedVPNSession(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, action string) (*model.AgentVPNSession, error) {
@@ -3676,7 +3753,7 @@ func isPolicyCoreSessionID(sessionID string) bool {
 }
 
 func isVPNTerminalState(state string) bool {
-	return state == model.VPNStateStopped
+	return state == model.VPNStateStopped || state == model.VPNStateFailed || state == model.VPNStateLost
 }
 
 func (v *VPNClass) sessionAndPolicyByID(sessionID string) (*model.AgentVPNSession, *model.AgentVPNPolicy, error) {
