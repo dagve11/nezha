@@ -2463,9 +2463,6 @@ func TestVPNRuntimeInactiveStatusSelfRecovers(t *testing.T) {
 	if recovering.State != model.VPNStateStarting || recovering.EntryState != model.VPNStatePending || recovering.ExitState != model.VPNStateStarting {
 		t.Fatalf("inactive runtime must stage self recovery, got state=%q entry=%q exit=%q", recovering.State, recovering.EntryState, recovering.ExitState)
 	}
-	if !strings.Contains(recovering.LastError, "runtime inactive") {
-		t.Fatalf("inactive runtime recovery must record reason, got %q", recovering.LastError)
-	}
 	_, exitReq := readVPNTask(t, h.exitStream)
 	if exitReq.Action != model.VPNActionStart || exitReq.Role != model.VPNRoleExit || exitReq.SessionID != session.SessionID {
 		t.Fatalf("inactive runtime recovery must dispatch start to exit first, got %+v", exitReq)
@@ -2477,6 +2474,9 @@ func TestVPNRuntimeInactiveStatusSelfRecovers(t *testing.T) {
 	var audit model.AgentVPNAuditLog
 	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionStatus, session.SessionID, false).Last(&audit).Error; err != nil {
 		t.Fatalf("inactive runtime recovery must write failed status audit: %v", err)
+	}
+	if !strings.Contains(audit.Message, "runtime inactive") {
+		t.Fatalf("inactive runtime recovery must record reason in audit, got %q", audit.Message)
 	}
 	if audit.Detail["self_recovery"] != "attempted" || audit.Detail["runtime_status"] != "inactive" || audit.Detail["system_proxy_status"] != "disabled" {
 		t.Fatalf("inactive runtime recovery audit detail mismatch: %#v", audit.Detail)
