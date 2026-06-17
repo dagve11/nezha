@@ -128,6 +128,9 @@ func StartVPNLifecycleJobs() error {
 		if err := VPNShared.ExpireSessions(time.Now()); err != nil {
 			log.Printf("NEZHA>> VPN session expiry scan failed: %v", err)
 		}
+		if err := VPNShared.CheckActiveSessionStatuses(); err != nil {
+			log.Printf("NEZHA>> VPN session health scan failed: %v", err)
+		}
 	})
 	return err
 }
@@ -544,6 +547,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			return nil, err
 		}
 		policy = v.fallbackVPNPolicyForLostSession(&session)
+	}
+	if normalizeVPNInactiveRuntimeStatusResult(&session, &result) {
+		v.appendControlLog(session.SessionID, "entry runtime status normalized to failure: %s", result.LastError)
 	}
 	if isVPNTerminalState(session.State) {
 		v.recordLateAgentCleanupResult(policy, &session, result)
@@ -1343,6 +1349,23 @@ func shouldAttemptVPNRuntimeSelfRecovery(policy *model.AgentVPNPolicy, session *
 	return true
 }
 
+func normalizeVPNInactiveRuntimeStatusResult(session *model.AgentVPNSession, result *model.VPNControlResult) bool {
+	if session == nil || result == nil {
+		return false
+	}
+	if session.State != model.VPNStateRunning || result.Action != model.VPNActionStatus || result.Role != model.VPNRoleEntry || result.State != model.VPNStateRunning {
+		return false
+	}
+	if strings.TrimSpace(strings.ToLower(result.RuntimeStatus)) != "inactive" {
+		return false
+	}
+	result.State = model.VPNStateFailed
+	if strings.TrimSpace(result.LastError) == "" {
+		result.LastError = "entry runtime inactive while session is running"
+	}
+	return true
+}
+
 func (v *VPNClass) runtimeSelfRecoveryAttempts(sessionID string) int {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -1595,6 +1618,34 @@ func (v *VPNClass) RecoverActiveSessions() error {
 		}
 		if err := v.querySessionStatus(session, policy, session.ExitServerID, model.VPNRoleExit); err != nil {
 			_ = v.markSessionLost(session, policy, model.VPNRoleExit, err.Error(), "dashboard recovery")
+		}
+	}
+	return nil
+}
+
+func (v *VPNClass) CheckActiveSessionStatuses() error {
+	var sessions []model.AgentVPNSession
+	if err := DB.Where("state IN ?", []string{model.VPNStateRunning, model.VPNStateUnknown}).Find(&sessions).Error; err != nil {
+		return err
+	}
+	now := time.Now()
+	for i := range sessions {
+		session := &sessions[i]
+		if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
+			continue
+		}
+		policy, err := v.policyForSession(session)
+		if err != nil {
+			reason := "policy not found during health check: " + err.Error()
+			_ = v.markSessionLost(session, v.fallbackVPNPolicyForLostSession(session), model.VPNRoleEntry, reason, "dashboard health check")
+			continue
+		}
+		if err := v.querySessionStatus(session, policy, session.EntryServerID, model.VPNRoleEntry); err != nil {
+			_ = v.markSessionLost(session, policy, model.VPNRoleEntry, err.Error(), "dashboard health check")
+			continue
+		}
+		if err := v.querySessionStatus(session, policy, session.ExitServerID, model.VPNRoleExit); err != nil {
+			_ = v.markSessionLost(session, policy, model.VPNRoleExit, err.Error(), "dashboard health check")
 		}
 	}
 	return nil
@@ -2245,6 +2296,12 @@ func vpnFailedResultAuditDetail(result model.VPNControlResult, cleanupDispatched
 		"role":               result.Role,
 		"result_action":      result.Action,
 		"cleanup_dispatched": fmt.Sprint(cleanupDispatched),
+	}
+	if result.RuntimeStatus != "" {
+		detail["runtime_status"] = result.RuntimeStatus
+	}
+	if result.SystemProxyStatus != "" {
+		detail["system_proxy_status"] = result.SystemProxyStatus
 	}
 	if len(cleanupErrors) > 0 {
 		detail["cleanup_errors"] = strings.Join(cleanupErrors, "; ")

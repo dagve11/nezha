@@ -2429,6 +2429,60 @@ func TestVPNRuntimeFailedStatusSelfRecoversOnceThenConfirmsFailure(t *testing.T)
 	}
 }
 
+func TestVPNRuntimeInactiveStatusSelfRecovers(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "inactive runtime recovers",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+		AutoRestart:         true,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	session := startAndRunTestVPNSession(t, h, actor, policy)
+	*h.notifications = nil
+
+	recovering, err := h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID:         session.SessionID,
+		Action:            model.VPNActionStatus,
+		Role:              model.VPNRoleEntry,
+		State:             model.VPNStateRunning,
+		RuntimeStatus:     "inactive",
+		SystemProxyStatus: "disabled",
+	})
+	if err != nil {
+		t.Fatalf("handle inactive runtime status: %v", err)
+	}
+	if recovering.State != model.VPNStateStarting || recovering.EntryState != model.VPNStatePending || recovering.ExitState != model.VPNStateStarting {
+		t.Fatalf("inactive runtime must stage self recovery, got state=%q entry=%q exit=%q", recovering.State, recovering.EntryState, recovering.ExitState)
+	}
+	if !strings.Contains(recovering.LastError, "runtime inactive") {
+		t.Fatalf("inactive runtime recovery must record reason, got %q", recovering.LastError)
+	}
+	_, exitReq := readVPNTask(t, h.exitStream)
+	if exitReq.Action != model.VPNActionStart || exitReq.Role != model.VPNRoleExit || exitReq.SessionID != session.SessionID {
+		t.Fatalf("inactive runtime recovery must dispatch start to exit first, got %+v", exitReq)
+	}
+	assertNoTask(t, h.entryStream)
+	if len(*h.notifications) != 0 {
+		t.Fatalf("inactive runtime recovery attempt must not notify final failure yet, got %#v", *h.notifications)
+	}
+	var audit model.AgentVPNAuditLog
+	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionStatus, session.SessionID, false).Last(&audit).Error; err != nil {
+		t.Fatalf("inactive runtime recovery must write failed status audit: %v", err)
+	}
+	if audit.Detail["self_recovery"] != "attempted" || audit.Detail["runtime_status"] != "inactive" || audit.Detail["system_proxy_status"] != "disabled" {
+		t.Fatalf("inactive runtime recovery audit detail mismatch: %#v", audit.Detail)
+	}
+}
+
 func TestVPNStartupFailedControlResultReportsCleanupDispatchFailure(t *testing.T) {
 	h := newVPNHarness(t)
 	actor := VPNActor{UserID: 100, Role: model.RoleMember}
@@ -6250,6 +6304,26 @@ func TestVPNOnAgentReconnectExpiredSessionCleanupFailurePreservesStoppedStateAnd
 	}
 	if stopAudit.Detail["cleanup_errors"] == "" || !strings.Contains(stopAudit.Detail["cleanup_errors"], "entry expire stop failed") {
 		t.Fatalf("expired reconnect cleanup failure must persist cleanup_errors in stop audit, detail=%#v", stopAudit.Detail)
+	}
+}
+
+func TestVPNCheckActiveSessionStatusesQueriesRunningSessions(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+	session := startAndRunTestVPNSession(t, h, actor, policy)
+
+	if err := h.vpn.CheckActiveSessionStatuses(); err != nil {
+		t.Fatalf("check active session statuses: %v", err)
+	}
+
+	_, entryReq := readVPNTask(t, h.entryStream)
+	if entryReq.Action != model.VPNActionStatus || entryReq.Role != model.VPNRoleEntry || entryReq.SessionID != session.SessionID {
+		t.Fatalf("health check must query entry status, got %+v", entryReq)
+	}
+	_, exitReq := readVPNTask(t, h.exitStream)
+	if exitReq.Action != model.VPNActionStatus || exitReq.Role != model.VPNRoleExit || exitReq.SessionID != session.SessionID {
+		t.Fatalf("health check must query exit status, got %+v", exitReq)
 	}
 }
 
