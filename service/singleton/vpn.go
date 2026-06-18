@@ -1330,7 +1330,7 @@ func shouldDispatchVPNFailureCleanup(wasRunning bool, session *model.AgentVPNSes
 	if result.Action == model.VPNActionPrepare || result.Action == model.VPNActionStart || result.Action == model.VPNActionRestart {
 		return true
 	}
-	return wasRunning && result.Role == model.VPNRoleEntry && session.ExitState == model.VPNStateRunning
+	return wasRunning && (session.EntryState == model.VPNStateRunning || session.ExitState == model.VPNStateRunning)
 }
 
 func shouldAttemptVPNRuntimeSelfRecovery(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, result model.VPNControlResult, wasRunning bool, now time.Time) bool {
@@ -1411,7 +1411,7 @@ func (v *VPNClass) startPreparedVPNSession(session *model.AgentVPNSession, polic
 		v.appendControlLog(session.SessionID, "relay created entry_stream=%s exit_stream=%s", session.EntryStreamID, session.ExitStreamID)
 	} else if session.RelayMode == model.VPNRelayModeDirect {
 		if endpoint, ok := vpnDirectEndpointForPolicy(session.ExitServerID, policy); ok {
-			v.appendControlLog(session.SessionID, "direct relay selected exit_address=%s", endpoint.Address)
+			v.appendControlLog(session.SessionID, "direct relay selected transport=%s crypto=%s exit_address=%s", endpoint.Transport, endpoint.Crypto, endpoint.Address)
 		}
 	}
 	session.State = model.VPNStateStarting
@@ -2118,6 +2118,9 @@ func (v *VPNClass) validatePolicyForm(actor VPNActor, form model.AgentVPNPolicyF
 	if err := validateVPNRelayPreference(form.RelayMode); err != nil {
 		return err
 	}
+	if err := validateVPNDirectTransportSettings(form.DirectTransport, form.DirectHost, form.DirectPort, form.DirectTLSServerName, form.DirectWSPath, form.DirectTLSVerify, form.DirectCertSHA256); err != nil {
+		return err
+	}
 	if err := validateVPNExitNAT(form.ExitNATEnabled, form.ExitNATHost, form.ExitNATPort); err != nil {
 		return err
 	}
@@ -2242,6 +2245,13 @@ func vpnPolicyAuditDetail(policy *model.AgentVPNPolicy) map[string]string {
 		"mode":                       policy.Mode,
 		"rule_mode":                  policy.RuleMode,
 		"relay_mode":                 policy.RelayMode,
+		"direct_transport":           normalizeVPNDirectTransport(policy.DirectTransport),
+		"direct_host":                policy.DirectHost,
+		"direct_port":                fmt.Sprint(policy.DirectPort),
+		"direct_tls_server_name":     policy.DirectTLSServerName,
+		"direct_ws_path":             normalizeVPNDirectWSPath(policy.DirectWSPath),
+		"direct_tls_verify":          fmt.Sprint(policy.DirectTLSVerify),
+		"direct_cert_sha256":         policy.DirectCertSHA256,
 		"exit_nat_enabled":           fmt.Sprint(policy.ExitNATEnabled),
 		"exit_nat_host":              policy.ExitNATHost,
 		"exit_nat_port":              fmt.Sprint(policy.ExitNATPort),
@@ -2716,10 +2726,18 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 			setVPNRequestExtra(&req, "egress_expected_ips", expectedIPs)
 		}
 	}
-	if req.RelayMode == model.VPNRelayModeDirect && role == model.VPNRoleEntry {
+	if req.RelayMode == model.VPNRelayModeDirect {
 		if endpoint, ok := vpnDirectEndpointForPolicy(session.ExitServerID, policy); ok {
-			setVPNRequestExtra(&req, "direct_address", endpoint.Address)
-			setVPNRequestExtra(&req, "direct_cert_sha256", endpoint.CertSHA256)
+			setVPNRequestExtra(&req, "direct_transport", endpoint.Transport)
+			setVPNRequestExtra(&req, "direct_crypto", endpoint.Crypto)
+			setVPNRequestExtra(&req, "direct_ws_path", endpoint.WSPath)
+			if role == model.VPNRoleEntry {
+				setVPNRequestExtra(&req, "direct_address", endpoint.Address)
+				setVPNRequestExtra(&req, "direct_cert_sha256", endpoint.CertSHA256)
+				setVPNRequestExtra(&req, "direct_host", endpoint.Host)
+				setVPNRequestExtra(&req, "direct_tls_server_name", endpoint.TLSServerName)
+				setVPNRequestExtra(&req, "direct_tls_verify", fmt.Sprint(endpoint.TLSVerify))
+			}
 		}
 	}
 	return req
@@ -2983,6 +3001,29 @@ func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]s
 	if value := strings.TrimSpace(detail["relay_mode"]); value != "" {
 		policy.RelayMode = normalizeVPNRelayPreference(value)
 	}
+	if value := strings.TrimSpace(detail["direct_transport"]); value != "" {
+		policy.DirectTransport = normalizeVPNDirectTransport(value)
+	}
+	if value := strings.TrimSpace(detail["direct_host"]); value != "" {
+		policy.DirectHost = value
+	}
+	if value := strings.TrimSpace(detail["direct_port"]); value != "" {
+		if parsed, err := strconv.ParseUint(value, 10, 32); err == nil {
+			policy.DirectPort = uint32(parsed)
+		}
+	}
+	if value := strings.TrimSpace(detail["direct_tls_server_name"]); value != "" {
+		policy.DirectTLSServerName = value
+	}
+	if value := strings.TrimSpace(detail["direct_ws_path"]); value != "" {
+		policy.DirectWSPath = value
+	}
+	if value := strings.TrimSpace(detail["direct_tls_verify"]); value != "" {
+		policy.DirectTLSVerify = strings.EqualFold(value, "true")
+	}
+	if value := strings.TrimSpace(detail["direct_cert_sha256"]); value != "" {
+		policy.DirectCertSHA256 = value
+	}
 	if value := strings.TrimSpace(detail["exit_nat_enabled"]); value != "" {
 		policy.ExitNATEnabled = strings.EqualFold(value, "true")
 	}
@@ -3084,6 +3125,9 @@ func validateVPNPolicyRuntime(policy *model.AgentVPNPolicy) error {
 		return err
 	}
 	if err := validateVPNRelayPreference(policy.RelayMode); err != nil {
+		return err
+	}
+	if err := validateVPNDirectTransportSettings(policy.DirectTransport, policy.DirectHost, policy.DirectPort, policy.DirectTLSServerName, policy.DirectWSPath, policy.DirectTLSVerify, policy.DirectCertSHA256); err != nil {
 		return err
 	}
 	if err := validateVPNExitNAT(policy.ExitNATEnabled, policy.ExitNATHost, policy.ExitNATPort); err != nil {
@@ -3207,6 +3251,118 @@ func validateVPNExitNAT(enabled bool, host string, port uint32) error {
 		return errors.New("exit nat host contains invalid IPv6 address")
 	}
 	return validateVPNDomain(trimmedHost)
+}
+
+func normalizeVPNDirectTransport(transport string) string {
+	switch strings.TrimSpace(transport) {
+	case model.VPNDirectTransportWSTLS:
+		return model.VPNDirectTransportWSTLS
+	default:
+		return model.VPNDirectTransportTCPTLS
+	}
+}
+
+func validateVPNDirectTransportSettings(transport string, host string, port uint32, tlsServerName string, wsPath string, tlsVerify bool, certSHA string) error {
+	switch strings.TrimSpace(transport) {
+	case "", model.VPNDirectTransportTCPTLS, model.VPNDirectTransportWSTLS:
+	default:
+		return fmt.Errorf("unsupported vpn direct transport %q", transport)
+	}
+	switch normalizeVPNDirectTransport(transport) {
+	case model.VPNDirectTransportTCPTLS:
+		pin := normalizeVPNDirectSHA256(certSHA)
+		if strings.TrimSpace(certSHA) != "" && pin == "" {
+			return errors.New("direct cert sha256 must be a 64 character hex digest")
+		}
+		return nil
+	case model.VPNDirectTransportWSTLS:
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return errors.New("direct host is required for ws_tls")
+		}
+		if port == 0 || port > 65535 {
+			return errors.New("direct port must be between 1 and 65535")
+		}
+		if err := validateVPNDirectHost(host); err != nil {
+			return err
+		}
+		if strings.TrimSpace(tlsServerName) != "" {
+			if err := validateVPNDirectHost(tlsServerName); err != nil {
+				return fmt.Errorf("direct tls server name: %w", err)
+			}
+		}
+		if err := validateVPNDirectWSPath(wsPath); err != nil {
+			return err
+		}
+		pin := normalizeVPNDirectSHA256(certSHA)
+		if strings.TrimSpace(certSHA) != "" && pin == "" {
+			return errors.New("direct cert sha256 must be a 64 character hex digest")
+		}
+		if !tlsVerify && pin == "" {
+			return errors.New("direct cert sha256 is required when TLS verification is disabled")
+		}
+		return nil
+	}
+	return nil
+}
+
+func validateVPNDirectHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return errors.New("host is required")
+	}
+	if strings.Contains(host, "://") || strings.ContainsAny(host, "/?#@") || strings.IndexFunc(host, unicode.IsSpace) >= 0 {
+		return errors.New("host must be a host name or IP address without scheme, path, or credentials")
+	}
+	if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
+		return errors.New("host must not include a port")
+	}
+	trimmedHost := strings.Trim(host, "[]")
+	if addr, err := netip.ParseAddr(trimmedHost); err == nil {
+		if addr.IsUnspecified() {
+			return errors.New("host must not be unspecified")
+		}
+		return nil
+	}
+	if strings.Contains(trimmedHost, ":") {
+		return errors.New("host contains invalid IPv6 address")
+	}
+	return validateVPNDomain(trimmedHost)
+}
+
+func validateVPNDirectWSPath(path string) error {
+	path = normalizeVPNDirectWSPath(path)
+	if !strings.HasPrefix(path, "/") {
+		return errors.New("direct websocket path must start with /")
+	}
+	if strings.ContainsAny(path, "?#") || strings.IndexFunc(path, unicode.IsSpace) >= 0 {
+		return errors.New("direct websocket path must not contain query, fragment, or spaces")
+	}
+	return nil
+}
+
+func normalizeVPNDirectWSPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "/agent-vpn/ws"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return path
+}
+
+func normalizeVPNDirectSHA256(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.TrimPrefix(value, "sha256:")
+	value = strings.ReplaceAll(value, ":", "")
+	if value == "" {
+		return ""
+	}
+	if !vpnSHA256HexPattern.MatchString(value) {
+		return ""
+	}
+	return value
 }
 
 func normalizeVPNRuleMode(mode string) string {
@@ -3434,6 +3590,13 @@ func vpnPolicyFromForm(userID uint64, form model.AgentVPNPolicyForm) *model.Agen
 		Mode:                    normalizeVPNMode(form.Mode),
 		RuleMode:                normalizeVPNRuleMode(form.RuleMode),
 		RelayMode:               normalizeVPNRelayPreference(form.RelayMode),
+		DirectTransport:         normalizeVPNDirectTransport(form.DirectTransport),
+		DirectHost:              strings.TrimSpace(form.DirectHost),
+		DirectPort:              form.DirectPort,
+		DirectTLSServerName:     strings.TrimSpace(form.DirectTLSServerName),
+		DirectWSPath:            normalizeVPNDirectWSPath(form.DirectWSPath),
+		DirectTLSVerify:         form.DirectTLSVerify,
+		DirectCertSHA256:        normalizeVPNDirectSHA256(form.DirectCertSHA256),
 		ExitNATEnabled:          form.ExitNATEnabled,
 		ExitNATHost:             strings.TrimSpace(form.ExitNATHost),
 		ExitNATPort:             form.ExitNATPort,
@@ -3572,8 +3735,14 @@ func vpnServerPublicIPs(serverID uint64) []string {
 }
 
 type vpnDirectEndpointInfo struct {
-	Address    string
-	CertSHA256 string
+	Address       string
+	CertSHA256    string
+	Transport     string
+	Crypto        string
+	Host          string
+	TLSServerName string
+	WSPath        string
+	TLSVerify     bool
 }
 
 func (v *VPNClass) preferredVPNRelayMode(session *model.AgentVPNSession, policy *model.AgentVPNPolicy) string {
@@ -3613,18 +3782,57 @@ func vpnDirectEndpointForPolicy(serverID uint64, policy *model.AgentVPNPolicy) (
 	}
 	host := server.Host
 	certSHA := strings.TrimSpace(host.VPNDirectCertSHA256)
-	if !host.VPNDirectEnabled || host.VPNDirectListenPort == 0 || certSHA == "" {
+	if !host.VPNDirectEnabled || host.VPNDirectListenPort == 0 {
 		return vpnDirectEndpointInfo{}, false
+	}
+	transport := normalizeVPNDirectTransport("")
+	if policy != nil {
+		transport = normalizeVPNDirectTransport(policy.DirectTransport)
+	}
+	if transport == model.VPNDirectTransportWSTLS {
+		if !vpnHostSupportsDirectTransport(host, model.VPNDirectTransportWSTLS) || host.VPNDirectCrypto != model.VPNDirectCryptoV2 {
+			return vpnDirectEndpointInfo{}, false
+		}
+		directHost := strings.Trim(strings.TrimSpace(policy.DirectHost), "[]")
+		if directHost == "" || policy.DirectPort == 0 {
+			return vpnDirectEndpointInfo{}, false
+		}
+		tlsServerName := strings.TrimSpace(policy.DirectTLSServerName)
+		if tlsServerName == "" {
+			tlsServerName = strings.Trim(directHost, "[]")
+		}
+		pin := normalizeVPNDirectSHA256(policy.DirectCertSHA256)
+		return vpnDirectEndpointInfo{
+			Address:       net.JoinHostPort(directHost, fmt.Sprint(policy.DirectPort)),
+			CertSHA256:    pin,
+			Transport:     model.VPNDirectTransportWSTLS,
+			Crypto:        model.VPNDirectCryptoV2,
+			Host:          directHost,
+			TLSServerName: tlsServerName,
+			WSPath:        normalizeVPNDirectWSPath(policy.DirectWSPath),
+			TLSVerify:     policy.DirectTLSVerify,
+		}, true
+	}
+	if certSHA == "" {
+		return vpnDirectEndpointInfo{}, false
+	}
+	endpoint := vpnDirectEndpointInfo{
+		CertSHA256: certSHA,
+		Transport:  model.VPNDirectTransportTCPTLS,
+		Crypto:     model.VPNDirectCryptoLegacy,
+		TLSVerify:  false,
 	}
 	if policy != nil && policy.ExitNATEnabled {
 		natHost := strings.Trim(strings.TrimSpace(policy.ExitNATHost), "[]")
 		if natHost == "" || policy.ExitNATPort == 0 {
 			return vpnDirectEndpointInfo{}, false
 		}
-		return vpnDirectEndpointInfo{Address: net.JoinHostPort(natHost, fmt.Sprint(policy.ExitNATPort)), CertSHA256: certSHA}, true
+		endpoint.Address = net.JoinHostPort(natHost, fmt.Sprint(policy.ExitNATPort))
+		return endpoint, true
 	}
 	if advertised := strings.TrimSpace(host.VPNDirectAdvertise); advertised != "" {
-		return vpnDirectEndpointInfo{Address: vpnDirectAddressWithPort(advertised, host.VPNDirectListenPort), CertSHA256: certSHA}, true
+		endpoint.Address = vpnDirectAddressWithPort(advertised, host.VPNDirectListenPort)
+		return endpoint, true
 	}
 	if server.GeoIP == nil {
 		return vpnDirectEndpointInfo{}, false
@@ -3634,9 +3842,25 @@ func vpnDirectEndpointForPolicy(serverID uint64, policy *model.AgentVPNPolicy) (
 		if ip == "" {
 			continue
 		}
-		return vpnDirectEndpointInfo{Address: net.JoinHostPort(ip, fmt.Sprint(host.VPNDirectListenPort)), CertSHA256: certSHA}, true
+		endpoint.Address = net.JoinHostPort(ip, fmt.Sprint(host.VPNDirectListenPort))
+		return endpoint, true
 	}
 	return vpnDirectEndpointInfo{}, false
+}
+
+func vpnHostSupportsDirectTransport(host *model.Host, transport string) bool {
+	if host == nil {
+		return false
+	}
+	if len(host.VPNDirectTransports) == 0 {
+		return transport == model.VPNDirectTransportTCPTLS
+	}
+	for _, value := range host.VPNDirectTransports {
+		if strings.TrimSpace(value) == transport {
+			return true
+		}
+	}
+	return false
 }
 
 func vpnDirectAddressWithPort(address string, port uint32) string {

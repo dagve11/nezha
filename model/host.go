@@ -118,30 +118,34 @@ type Host struct {
 	VPNDirectListenPort uint32   `json:"vpn_direct_listen_port,omitempty"`
 	VPNDirectAdvertise  string   `json:"vpn_direct_advertise,omitempty"`
 	VPNDirectCertSHA256 string   `json:"vpn_direct_cert_sha256,omitempty"`
+	VPNDirectTransports []string `json:"vpn_direct_transports,omitempty"`
+	VPNDirectCrypto     string   `json:"vpn_direct_crypto_version,omitempty"`
 }
 
 func (h *Host) PB() *pb.Host {
 	return &pb.Host{
-		Platform:            h.Platform,
-		PlatformVersion:     h.PlatformVersion,
-		Cpu:                 h.CPU,
-		MemTotal:            h.MemTotal,
-		DiskTotal:           h.DiskTotal,
-		SwapTotal:           h.SwapTotal,
-		Arch:                h.Arch,
-		Virtualization:      h.Virtualization,
-		BootTime:            h.BootTime,
-		Version:             h.Version,
-		Gpu:                 h.GPU,
-		VpnEnabled:          h.VPNEnabled,
-		VpnAllowSystemProxy: h.VPNAllowSystemProxy,
-		VpnAllowTun:         h.VPNAllowTun,
-		VpnCoreVersion:      h.VPNCoreVersion,
-		VpnLastError:        h.VPNLastError,
-		VpnDirectEnabled:    h.VPNDirectEnabled,
-		VpnDirectListenPort: h.VPNDirectListenPort,
-		VpnDirectAdvertise:  h.VPNDirectAdvertise,
-		VpnDirectCertSha256: h.VPNDirectCertSHA256,
+		Platform:               h.Platform,
+		PlatformVersion:        h.PlatformVersion,
+		Cpu:                    h.CPU,
+		MemTotal:               h.MemTotal,
+		DiskTotal:              h.DiskTotal,
+		SwapTotal:              h.SwapTotal,
+		Arch:                   h.Arch,
+		Virtualization:         h.Virtualization,
+		BootTime:               h.BootTime,
+		Version:                h.Version,
+		Gpu:                    h.GPU,
+		VpnEnabled:             h.VPNEnabled,
+		VpnAllowSystemProxy:    h.VPNAllowSystemProxy,
+		VpnAllowTun:            h.VPNAllowTun,
+		VpnCoreVersion:         h.VPNCoreVersion,
+		VpnLastError:           h.VPNLastError,
+		VpnDirectEnabled:       h.VPNDirectEnabled,
+		VpnDirectListenPort:    h.VPNDirectListenPort,
+		VpnDirectAdvertise:     h.VPNDirectAdvertise,
+		VpnDirectCertSha256:    h.VPNDirectCertSHA256,
+		VpnDirectTransports:    h.VPNDirectTransports,
+		VpnDirectCryptoVersion: h.VPNDirectCrypto,
 	}
 }
 
@@ -165,6 +169,8 @@ func (h *Host) Filter() *Host {
 		VPNDirectEnabled:    h.VPNDirectEnabled,
 		VPNDirectListenPort: h.VPNDirectListenPort,
 		VPNDirectAdvertise:  h.VPNDirectAdvertise,
+		VPNDirectTransports: append([]string(nil), h.VPNDirectTransports...),
+		VPNDirectCrypto:     h.VPNDirectCrypto,
 	}
 }
 
@@ -193,6 +199,8 @@ func PB2Host(h *pb.Host) Host {
 		VPNDirectListenPort: h.GetVpnDirectListenPort(),
 		VPNDirectAdvertise:  h.GetVpnDirectAdvertise(),
 		VPNDirectCertSHA256: h.GetVpnDirectCertSha256(),
+		VPNDirectTransports: h.GetVpnDirectTransports(),
+		VPNDirectCrypto:     h.GetVpnDirectCryptoVersion(),
 	}
 }
 

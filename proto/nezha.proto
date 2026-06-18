@@ -33,6 +33,8 @@ message Host {
   uint32 vpn_direct_listen_port = 18;
   string vpn_direct_advertise = 19;
   string vpn_direct_cert_sha256 = 20;
+  repeated string vpn_direct_transports = 21;
+  string vpn_direct_crypto_version = 22;
 }
 
 message State {

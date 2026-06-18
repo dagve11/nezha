@@ -38,6 +38,13 @@ const (
 )
 
 const (
+	VPNDirectTransportTCPTLS = "tcp_tls"
+	VPNDirectTransportWSTLS  = "ws_tls"
+	VPNDirectCryptoLegacy    = "legacy"
+	VPNDirectCryptoV2        = "direct_v2"
+)
+
+const (
 	VPNRuleModeGlobal = "global"
 	VPNRuleModeDomain = "domain"
 	VPNRuleModeIP     = "ip"
@@ -167,6 +174,13 @@ type AgentVPNPolicyForm struct {
 	Mode                    string   `json:"mode"`
 	RuleMode                string   `json:"rule_mode"`
 	RelayMode               string   `json:"relay_mode"`
+	DirectTransport         string   `json:"direct_transport"`
+	DirectHost              string   `json:"direct_host"`
+	DirectPort              uint32   `json:"direct_port"`
+	DirectTLSServerName     string   `json:"direct_tls_server_name"`
+	DirectWSPath            string   `json:"direct_ws_path"`
+	DirectTLSVerify         bool     `json:"direct_tls_verify"`
+	DirectCertSHA256        string   `json:"direct_cert_sha256"`
 	ExitNATEnabled          bool     `json:"exit_nat_enabled"`
 	ExitNATHost             string   `json:"exit_nat_host"`
 	ExitNATPort             uint32   `json:"exit_nat_port"`
@@ -237,6 +251,13 @@ type AgentVPNPolicy struct {
 	Mode                    string   `json:"mode" gorm:"index"`
 	RuleMode                string   `json:"rule_mode"`
 	RelayMode               string   `json:"relay_mode"`
+	DirectTransport         string   `json:"direct_transport"`
+	DirectHost              string   `json:"direct_host"`
+	DirectPort              uint32   `json:"direct_port"`
+	DirectTLSServerName     string   `json:"direct_tls_server_name"`
+	DirectWSPath            string   `json:"direct_ws_path"`
+	DirectTLSVerify         bool     `json:"direct_tls_verify"`
+	DirectCertSHA256        string   `json:"direct_cert_sha256"`
 	ExitNATEnabled          bool     `json:"exit_nat_enabled"`
 	ExitNATHost             string   `json:"exit_nat_host"`
 	ExitNATPort             uint32   `json:"exit_nat_port"`

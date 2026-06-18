@@ -748,6 +748,145 @@ func TestVPNStartSessionUsesExitNATMappingForDirectRelay(t *testing.T) {
 	}
 }
 
+func TestVPNStartSessionUsesWSTLSDirectRelayMetadata(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectTransports = []string{model.VPNDirectTransportTCPTLS, model.VPNDirectTransportWSTLS}
+	h.mustServer(2).Host.VPNDirectCrypto = model.VPNDirectCryptoV2
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "WSS exit",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		RelayMode:           model.VPNRelayModeDirect,
+		DirectTransport:     model.VPNDirectTransportWSTLS,
+		DirectHost:          "pt.example.com",
+		DirectPort:          443,
+		DirectTLSServerName: "edge.example.com",
+		DirectWSPath:        "/pt/strategy",
+		DirectTLSVerify:     true,
+		DirectCertSHA256:    strings.Repeat("f", 64),
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if exitStartReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("exit start relay mode = %q, want direct", exitStartReq.RelayMode)
+	}
+	if exitStartReq.Extra["direct_transport"] != model.VPNDirectTransportWSTLS || exitStartReq.Extra["direct_crypto"] != model.VPNDirectCryptoV2 {
+		t.Fatalf("exit direct metadata mismatch: %#v", exitStartReq.Extra)
+	}
+	if exitStartReq.Extra["direct_ws_path"] != "/pt/strategy" {
+		t.Fatalf("exit direct ws path = %q", exitStartReq.Extra["direct_ws_path"])
+	}
+
+	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatalf("handle exit running: %v", err)
+	}
+	_, entryStartReq := readVPNTask(t, h.entryStream)
+	if entryStartReq.Extra["direct_transport"] != model.VPNDirectTransportWSTLS {
+		t.Fatalf("entry transport = %q, want ws_tls", entryStartReq.Extra["direct_transport"])
+	}
+	if entryStartReq.Extra["direct_crypto"] != model.VPNDirectCryptoV2 {
+		t.Fatalf("entry crypto = %q, want direct_v2", entryStartReq.Extra["direct_crypto"])
+	}
+	if entryStartReq.Extra["direct_address"] != "pt.example.com:443" {
+		t.Fatalf("entry direct address = %q", entryStartReq.Extra["direct_address"])
+	}
+	if entryStartReq.Extra["direct_tls_server_name"] != "edge.example.com" || entryStartReq.Extra["direct_ws_path"] != "/pt/strategy" {
+		t.Fatalf("entry tls/ws metadata mismatch: %#v", entryStartReq.Extra)
+	}
+	if entryStartReq.Extra["direct_tls_verify"] != "true" {
+		t.Fatalf("entry tls verify = %q", entryStartReq.Extra["direct_tls_verify"])
+	}
+	if entryStartReq.Extra["direct_cert_sha256"] != strings.Repeat("f", 64) {
+		t.Fatalf("entry cert pin mismatch: %#v", entryStartReq.Extra)
+	}
+}
+
+func TestVPNStartSessionFallsBackWhenWSTLSUnsupportedByExit(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectCertSHA256 = strings.Repeat("e", 64)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "WSS unsupported",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		RelayMode:           model.VPNRelayModeDirect,
+		DirectTransport:     model.VPNDirectTransportWSTLS,
+		DirectHost:          "pt.example.com",
+		DirectPort:          443,
+		DirectTLSVerify:     true,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if exitStartReq.RelayMode != model.VPNRelayModeDashboard {
+		t.Fatalf("unsupported ws_tls must use dashboard relay, got %q", exitStartReq.RelayMode)
+	}
+	if _, ok := exitStartReq.Extra["direct_transport"]; ok {
+		t.Fatalf("dashboard relay request must not include direct metadata: %#v", exitStartReq.Extra)
+	}
+}
+
+func TestVPNSavePolicyRejectsWSTLSInsecureWithoutCertificatePin(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	_, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "WSS insecure",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		RelayMode:           model.VPNRelayModeDirect,
+		DirectTransport:     model.VPNDirectTransportWSTLS,
+		DirectHost:          "pt.example.com",
+		DirectPort:          443,
+		DirectTLSVerify:     false,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+	})
+	if err == nil || !strings.Contains(err.Error(), "direct cert sha256 is required") {
+		t.Fatalf("expected missing certificate pin rejection, got %v", err)
+	}
+}
+
 func TestVPNStartSessionRespectsDashboardRelayPolicyPreference(t *testing.T) {
 	h := newVPNHarness(t)
 	h.mustServer(2).Host.VPNDirectEnabled = true
@@ -2385,10 +2524,10 @@ func TestVPNRuntimeFailedStatusSelfRecoversOnceThenConfirmsFailure(t *testing.T)
 	}
 
 	*h.notifications = nil
-	failed, err := h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+	failed, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
 		SessionID: session.SessionID,
 		Action:    model.VPNActionStatus,
-		Role:      model.VPNRoleEntry,
+		Role:      model.VPNRoleExit,
 		State:     model.VPNStateFailed,
 		LastError: "exit status 1 again",
 	})
