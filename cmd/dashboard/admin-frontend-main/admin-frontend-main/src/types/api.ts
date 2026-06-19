@@ -410,7 +410,8 @@ export interface ModelNAT {
 
 export interface ModelNATForm {
     enabled: boolean
-    host: string
+    host?: string
+    local_port?: number
     /** @minLength 1 */
     name: string
     port: number
@@ -562,7 +563,7 @@ export interface ModelServer {
     id: number
     last_active: string
     name: string
-    online: boolean
+    online?: boolean
     /** 管理员可见备注 */
     note: string
     override_ddns_domains?: Record<string, string[]>
@@ -725,6 +726,8 @@ export interface ModelSetting {
     /** 用于前端判断生成的安装命令是否启用 TLS */
     tls: boolean
     user_template: string
+    /** 代理隧道调试结果记录 */
+    vpn_debug: boolean
     /** 前端真实IP */
     web_real_ip_header: string
 }
@@ -747,7 +750,9 @@ export interface ModelSettingForm {
     /** @minLength 1 */
     site_name: string
     tls?: boolean
+    tsdb_enabled?: boolean
     user_template?: string
+    vpn_debug?: boolean
     /** 前端真实IP */
     web_real_ip_header?: string
 }
@@ -755,6 +760,7 @@ export interface ModelSettingForm {
 export interface ModelSettingResponse {
     config: ModelSetting
     frontend_templates: ModelFrontendTemplate[]
+    tsdb_enabled: boolean
     version: string
 }
 
@@ -766,7 +772,6 @@ export interface ModelStreamServer {
     id: number
     last_active: string
     name: string
-    online: boolean
     /** 公开备注，只第一个数据包有值 */
     public_note: string
     state: ModelHostState

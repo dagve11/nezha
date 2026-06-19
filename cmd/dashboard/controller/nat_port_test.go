@@ -95,6 +95,32 @@ func TestCreateNATTrimsLocalServiceBeforePersisting(t *testing.T) {
 	require.Equal(t, "127.0.0.1:22", cached.Host)
 }
 
+func TestCreateNATBuildsLocalServiceFromLocalPort(t *testing.T) {
+	ctx := setupNATPortControllerFixture(t)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/nat", strings.NewReader(`{"name":"ssh","enabled":false,"local_port":22,"port":2222,"server_id":1}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	id, err := createNAT(ctx)
+	require.NoError(t, err)
+
+	var got model.NAT
+	require.NoError(t, singleton.DB.First(&got, id).Error)
+	require.Equal(t, "127.0.0.1:22", got.Host)
+}
+
+func TestCreateNATRejectsNonIPv4LoopbackLocalService(t *testing.T) {
+	for _, host := range []string{"localhost:22", "192.168.1.10:22", "[::1]:22"} {
+		t.Run(host, func(t *testing.T) {
+			ctx := setupNATPortControllerFixture(t)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/nat", strings.NewReader(`{"name":"ssh","enabled":false,"host":"`+host+`","port":2222,"server_id":1}`))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+
+			_, err := createNAT(ctx)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestCreateNATRejectsDashboardListenPort(t *testing.T) {
 	ctx := setupNATPortControllerFixture(t)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/nat", strings.NewReader(`{"name":"ssh","enabled":false,"host":"127.0.0.1:22","port":8008,"server_id":1}`))

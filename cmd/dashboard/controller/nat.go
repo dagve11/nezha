@@ -208,6 +208,9 @@ func batchDeleteNAT(c *gin.Context) (any, error) {
 func normalizeNATForm(nf model.NATForm) model.NATForm {
 	nf.Name = strings.TrimSpace(nf.Name)
 	nf.Host = strings.TrimSpace(nf.Host)
+	if nf.LocalPort != 0 {
+		nf.Host = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(nf.LocalPort)))
+	}
 	return nf
 }
 
@@ -243,6 +246,9 @@ func validateNATLocalService(host string) error {
 	}
 	if targetHost == "" {
 		return singleton.Localizer.ErrorT("local service host cannot be empty")
+	}
+	if targetHost != "127.0.0.1" {
+		return singleton.Localizer.ErrorT("local service host must be 127.0.0.1")
 	}
 	port, err := strconv.ParseUint(targetPort, 10, 16)
 	if err != nil || port == 0 {
