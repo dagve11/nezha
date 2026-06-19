@@ -654,10 +654,10 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		v.recordAgentDebugResult(reporterServerID, result)
 	}
 	v.deliverPolicyStatusResult(reporterServerID, result)
+	if isPolicyCoreSessionID(sessionID) {
+		return nil, nil
+	}
 	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
-		if isPolicyCoreSessionID(sessionID) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	if !reporterMatchesVPNRole(reporterServerID, result.Role, &session) {
