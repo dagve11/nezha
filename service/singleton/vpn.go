@@ -1748,6 +1748,19 @@ func (v *VPNClass) fallbackDirectStartFailure(policy *model.AgentVPNPolicy, sess
 		"reason":           reason,
 	})
 	cleanupErrors := v.stopDirectRelayAttemptBeforeFallback(session, policy, token, result.Action)
+	runtimeInstanceID, err := VPNIDGenerator("vpn_runtime_")
+	if err != nil {
+		session.State = model.VPNStateFailed
+		session.LastError = fmt.Errorf("generate fallback runtime instance id: %w", err).Error()
+		if len(cleanupErrors) > 0 {
+			session.LastError += "; direct cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+		}
+		_ = DB.Save(session).Error
+		v.finalizeVPNSessionRuntime(session.SessionID)
+		v.notifyLifecycleFailure(policy, session, result.Action, "")
+		return session, true, err
+	}
+	session.RuntimeInstanceID = runtimeInstanceID
 	session.RelayMode = model.VPNRelayModeDashboard
 	session.State = model.VPNStateStarting
 	session.EntryState = model.VPNStatePending

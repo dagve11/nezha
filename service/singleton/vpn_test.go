@@ -994,6 +994,12 @@ func TestVPNStartSessionFallsBackToDashboardRelayWhenDirectEntryStartFails(t *te
 	if fallbackExitReq.Token != directEntryReq.Token || directExitStopReq.Token != directEntryReq.Token {
 		t.Fatal("fallback cleanup and dashboard start must keep the existing per-session token")
 	}
+	if directExitStopReq.RuntimeInstanceID != directEntryReq.RuntimeInstanceID {
+		t.Fatal("fallback cleanup stop must use the old direct runtime instance id")
+	}
+	if fallbackExitReq.RuntimeInstanceID == "" || fallbackExitReq.RuntimeInstanceID == directEntryReq.RuntimeInstanceID {
+		t.Fatalf("fallback dashboard start must use a new runtime instance id, old=%q new=%q", directEntryReq.RuntimeInstanceID, fallbackExitReq.RuntimeInstanceID)
+	}
 
 	var audit model.AgentVPNAuditLog
 	if err := DB.Where("action = ? AND session_id = ? AND message = ?", model.VPNAuditActionStatus, session.SessionID, "direct relay fallback to dashboard").Last(&audit).Error; err != nil {
@@ -1056,6 +1062,25 @@ func TestVPNDirectFallbackStopsExitAttemptBeforeDashboardRestart(t *testing.T) {
 	}
 	if fallbackExitReq.Token != directEntryReq.Token || exitStopReq.Token != directEntryReq.Token {
 		t.Fatal("fallback cleanup and restart must keep the existing per-session token")
+	}
+	if exitStopReq.RuntimeInstanceID != directEntryReq.RuntimeInstanceID {
+		t.Fatal("fallback cleanup stop must use the old direct runtime instance id")
+	}
+	if fallbackExitReq.RuntimeInstanceID == "" || fallbackExitReq.RuntimeInstanceID == directEntryReq.RuntimeInstanceID {
+		t.Fatalf("fallback dashboard start must use a new runtime instance id, old=%q new=%q", directEntryReq.RuntimeInstanceID, fallbackExitReq.RuntimeInstanceID)
+	}
+	staleStopSession, err := h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID:         session.SessionID,
+		RuntimeInstanceID: exitStopReq.RuntimeInstanceID,
+		Action:            model.VPNActionStop,
+		Role:              model.VPNRoleExit,
+		State:             model.VPNStateStopped,
+	})
+	if err != nil {
+		t.Fatalf("stale direct cleanup stop result should be ignored without error: %v", err)
+	}
+	if staleStopSession.State != model.VPNStateStarting || staleStopSession.RuntimeInstanceID != fallbackExitReq.RuntimeInstanceID {
+		t.Fatalf("stale direct cleanup stop must not stop fallback session: state=%q runtime=%q want_runtime=%q", staleStopSession.State, staleStopSession.RuntimeInstanceID, fallbackExitReq.RuntimeInstanceID)
 	}
 
 	logs := strings.Join(h.vpn.SessionLogs(session.SessionID), "\n")
