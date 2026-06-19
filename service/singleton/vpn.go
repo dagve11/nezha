@@ -25,19 +25,23 @@ import (
 )
 
 const (
-	defaultVPNExpiresSeconds        = 24 * 60 * 60
-	defaultVPNCoreDownloadBaseURL   = "https://github.com/dagve11/sb-core/releases/download/V1.0.0"
-	defaultVPNCoreCNDownloadBaseURL = "https://gitee.com/AGZZY11/sb-core/releases/download/V1.0.0"
-	defaultVPNCoreManifestURL       = defaultVPNCoreDownloadBaseURL + "/manifest.json"
-	defaultVPNCoreCNManifestURL     = defaultVPNCoreCNDownloadBaseURL + "/manifest.json"
-	defaultVPNPolicyCoreSessionID   = "core_policy"
-	vpnRuntimeSelfRecoveryMaxTries  = 1
+	defaultVPNExpiresSeconds           = 24 * 60 * 60
+	defaultVPNCoreDownloadBaseURL      = "https://github.com/dagve11/sb-core/releases/download/V1.0.0"
+	defaultVPNCoreCNDownloadBaseURL    = "https://gitee.com/AGZZY11/sb-core/releases/download/V1.0.0"
+	defaultVPNCoreManifestURL          = defaultVPNCoreDownloadBaseURL + "/manifest.json"
+	defaultVPNCoreCNManifestURL        = defaultVPNCoreCNDownloadBaseURL + "/manifest.json"
+	defaultVPNPolicyCoreSessionID      = "core_policy"
+	defaultVPNAutoRestartMaxAttempts   = 5
+	defaultVPNAutoRestartWindowSeconds = 10 * 60
+	maxVPNAutoRestartAttempts          = 20
+	maxVPNAutoRestartBackoffSeconds    = 10 * 60
 )
 
 var (
-	vpnSHA256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
-	vpnANSISequence     = regexp.MustCompile(`(?:\x1b)?\[[0-9;]*m`)
-	vpnLogTimestamp     = regexp.MustCompile(`^\[\d{2}:\d{2}:\d{2}\]\s`)
+	vpnSHA256HexPattern                 = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	vpnANSISequence                     = regexp.MustCompile(`(?:\x1b)?\[[0-9;]*m`)
+	vpnLogTimestamp                     = regexp.MustCompile(`^\[\d{2}:\d{2}:\d{2}\]\s`)
+	defaultVPNAutoRestartBackoffSeconds = []uint32{0, 5, 15, 30, 60}
 )
 
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
@@ -93,6 +97,7 @@ type VPNClass struct {
 	sessionLogs       map[string][]string
 	relayTraffic      map[string]vpnRelayTrafficSnapshot
 	statusWaiters     map[string]chan vpnPolicyStatusAgentResult
+	recoveryTimers    map[string]*time.Timer
 	agentDebugSeq     uint64
 	agentDebugResults []model.AgentVPNDebugResult
 
@@ -111,12 +116,31 @@ type vpnPolicyStatusAgentResult struct {
 	result   model.VPNControlResult
 }
 
+type vpnSessionRestartOptions struct {
+	runtimeSelfRecovery bool
+}
+
+func resetVPNSessionRecovery(session *model.AgentVPNSession) {
+	if session == nil {
+		return
+	}
+	session.RecoveryState = model.VPNRecoveryStateIdle
+	session.RecoveryAttempt = 0
+	session.RecoveryStartedAt = nil
+	session.RecoveryNextAt = nil
+	session.RecoveryLastError = ""
+	session.RecoveryReason = ""
+}
+
 func StartVPNLifecycleJobs() error {
 	if VPNShared == nil {
 		return errors.New("vpn service is not initialized")
 	}
 	if err := VPNShared.RecoverActiveSessions(); err != nil {
 		log.Printf("NEZHA>> VPN session recovery failed: %v", err)
+	}
+	if err := VPNShared.RecoverScheduledSelfRecoveries(); err != nil {
+		log.Printf("NEZHA>> VPN self recovery scheduler restore failed: %v", err)
 	}
 	if CronShared == nil {
 		return errors.New("cron scheduler is not initialized")
@@ -142,8 +166,105 @@ func NewVPNClass() *VPNClass {
 		sessionLogs:     map[string][]string{},
 		relayTraffic:    map[string]vpnRelayTrafficSnapshot{},
 		statusWaiters:   map[string]chan vpnPolicyStatusAgentResult{},
+		recoveryTimers:  map[string]*time.Timer{},
 
 		relayTrafficFlushInterval: defaultVPNRelayTrafficFlushInterval,
+	}
+}
+
+func (v *VPNClass) RecoverScheduledSelfRecoveries() error {
+	var sessions []model.AgentVPNSession
+	if err := DB.Where("recovery_state = ?", model.VPNRecoveryStateScheduled).Find(&sessions).Error; err != nil {
+		return err
+	}
+	now := time.Now()
+	for i := range sessions {
+		session := &sessions[i]
+		if session.RecoveryNextAt == nil {
+			resetVPNSessionRecovery(session)
+			_ = DB.Save(session).Error
+			continue
+		}
+		if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
+			_ = v.expireSession(session, now)
+			continue
+		}
+		v.armRuntimeSelfRecoveryTimer(session.SessionID, *session.RecoveryNextAt)
+	}
+	return nil
+}
+
+func (v *VPNClass) armRuntimeSelfRecoveryTimer(sessionID string, nextAt time.Time) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	delay := time.Until(nextAt)
+	if delay < 0 {
+		delay = 0
+	}
+	v.mu.Lock()
+	if existing := v.recoveryTimers[sessionID]; existing != nil {
+		existing.Stop()
+	}
+	v.recoveryTimers[sessionID] = time.AfterFunc(delay, func() {
+		v.runScheduledRuntimeSelfRecovery(sessionID)
+	})
+	v.mu.Unlock()
+}
+
+func (v *VPNClass) cancelRuntimeSelfRecoveryTimer(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	v.mu.Lock()
+	if timer := v.recoveryTimers[sessionID]; timer != nil {
+		timer.Stop()
+		delete(v.recoveryTimers, sessionID)
+	}
+	v.mu.Unlock()
+}
+
+func (v *VPNClass) runScheduledRuntimeSelfRecovery(sessionID string) {
+	v.cancelRuntimeSelfRecoveryTimer(sessionID)
+	session, policy, err := v.sessionAndPolicyByID(sessionID)
+	if err != nil {
+		return
+	}
+	if session.RecoveryState != model.VPNRecoveryStateScheduled {
+		return
+	}
+	now := time.Now()
+	if session.RecoveryNextAt != nil && session.RecoveryNextAt.After(now.Add(500*time.Millisecond)) {
+		v.armRuntimeSelfRecoveryTimer(session.SessionID, *session.RecoveryNextAt)
+		return
+	}
+	if !policy.AutoRestart || !vpnAutoRestartAllowsFailure(policy, session.RecoveryReason) {
+		session.RecoveryState = model.VPNRecoveryStateExhausted
+		session.State = model.VPNStateFailed
+		session.LastError = firstNonEmptyString(session.RecoveryLastError, "self recovery disabled")
+		_ = DB.Save(session).Error
+		v.finalizeVPNSessionRuntime(session.SessionID)
+		return
+	}
+	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
+		_ = v.expireSession(session, now)
+		return
+	}
+	v.appendControlLog(session.SessionID, "runtime self recovery restarting attempt %d/%d reason=%s", session.RecoveryAttempt, policy.AutoRestartMaxAttempts, session.RecoveryReason)
+	if err := v.restartExistingSessionWithOptions(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, session, policy, model.VPNActionStart, vpnSessionRestartOptions{runtimeSelfRecovery: true}); err != nil {
+		result := model.VPNControlResult{
+			SessionID:     session.SessionID,
+			Action:        model.VPNActionStatus,
+			Role:          vpnRoleFromError(err, model.VPNRoleEntry),
+			State:         model.VPNStateFailed,
+			FailureReason: firstNonEmptyString(session.RecoveryReason, model.VPNFailureReasonUnknown),
+			LastError:     "self recovery failed: " + err.Error(),
+			StartedAtUnix: session.StartedAt.Unix(),
+		}
+		_, _ = v.scheduleRuntimeSelfRecovery(policy, session, result, "", time.Now())
+		return
 	}
 }
 
@@ -444,31 +565,38 @@ func (v *VPNClass) StartSession(actor VPNActor, policyID uint64) (*model.AgentVP
 		v.recordStartSessionPreflightFailure(actor, policy, err, "exit_stream_id_generation")
 		return nil, err
 	}
+	runtimeInstanceID, err := VPNIDGenerator("vpn_runtime_")
+	if err != nil {
+		v.recordStartSessionPreflightFailure(actor, policy, err, "runtime_instance_id_generation")
+		return nil, err
+	}
 
 	now := time.Now()
 	session := &model.AgentVPNSession{
 		Common: model.Common{
 			UserID: actor.UserID,
 		},
-		PolicyID:       policy.ID,
-		EntryServerID:  policy.EntryServerID,
-		ExitServerID:   policy.ExitServerID,
-		SessionID:      sessionID,
-		TokenHash:      hashVPNToken(token),
-		Mode:           policy.Mode,
-		RuleMode:       normalizeVPNRuleMode(policy.RuleMode),
-		RelayMode:      model.VPNRelayModeDashboard,
-		State:          model.VPNStateStarting,
-		EntryState:     model.VPNStateStarting,
-		ExitState:      model.VPNStateStarting,
-		EntryStreamID:  entryStreamID,
-		ExitStreamID:   exitStreamID,
-		LocalHTTP:      policy.ListenHTTP,
-		LocalSOCKS:     policy.ListenSOCKS,
-		TunName:        policy.TunName,
-		SetSystemProxy: policy.SetSystemProxy,
-		StartedAt:      now,
-		ExpiresAt:      now.Add(time.Duration(policy.ExpiresSeconds) * time.Second),
+		PolicyID:          policy.ID,
+		EntryServerID:     policy.EntryServerID,
+		ExitServerID:      policy.ExitServerID,
+		SessionID:         sessionID,
+		RuntimeInstanceID: runtimeInstanceID,
+		TokenHash:         hashVPNToken(token),
+		Mode:              policy.Mode,
+		RuleMode:          normalizeVPNRuleMode(policy.RuleMode),
+		RelayMode:         model.VPNRelayModeDashboard,
+		State:             model.VPNStateStarting,
+		EntryState:        model.VPNStateStarting,
+		ExitState:         model.VPNStateStarting,
+		EntryStreamID:     entryStreamID,
+		ExitStreamID:      exitStreamID,
+		LocalHTTP:         policy.ListenHTTP,
+		LocalSOCKS:        policy.ListenSOCKS,
+		TunName:           policy.TunName,
+		SetSystemProxy:    policy.SetSystemProxy,
+		RecoveryState:     model.VPNRecoveryStateIdle,
+		StartedAt:         now,
+		ExpiresAt:         now.Add(time.Duration(policy.ExpiresSeconds) * time.Second),
 	}
 	if err := DB.Create(session).Error; err != nil {
 		return nil, err
@@ -536,6 +664,11 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		v.appendControlLog(session.SessionID, "ignored unauthorized agent report server=%d role=%s action=%s state=%s", reporterServerID, result.Role, result.Action, result.State)
 		return nil, fmt.Errorf("server %d is not authorized to report %s for session %s", reporterServerID, result.Role, session.SessionID)
 	}
+	if isStaleVPNRuntimeResult(&session, result) {
+		v.appendControlLog(session.SessionID, "ignored stale agent report server=%d role=%s action=%s state=%s runtime_instance=%s current_runtime_instance=%s started_at=%d current_started_at=%d",
+			reporterServerID, result.Role, result.Action, result.State, result.RuntimeInstanceID, session.RuntimeInstanceID, result.StartedAtUnix, session.StartedAt.Unix())
+		return &session, nil
+	}
 
 	v.appendControlLog(session.SessionID, "agent report server=%d role=%s action=%s state=%s%s", reporterServerID, result.Role, result.Action, result.State, vpnControlResultDetail(result))
 	if len(result.Logs) > 0 {
@@ -572,43 +705,10 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		}
 		v.appendControlLog(session.SessionID, "session failed by %s agent: %s", result.Role, firstNonEmptyString(session.LastError, result.LastError, "unknown error"))
 		agentCleanupLogs := vpnAgentCleanupLogSummary(result.Logs)
-		selfRecoveryExhausted := false
 		if shouldAttemptVPNRuntimeSelfRecovery(policy, &session, result, wasRunning, time.Now()) {
-			attempts := v.runtimeSelfRecoveryAttempts(session.SessionID)
-			if attempts >= vpnRuntimeSelfRecoveryMaxTries {
-				selfRecoveryExhausted = true
-				v.appendControlLog(session.SessionID, "runtime self recovery exhausted after %d attempt(s); confirming failure", attempts)
-			} else {
-				attempt := attempts + 1
-				auditDetail := vpnFailedRuntimeAuditDetail(result, false, nil)
-				auditDetail["self_recovery"] = "attempted"
-				auditDetail["self_recovery_attempt"] = fmt.Sprint(attempt)
-				auditDetail["self_recovery_max_attempts"] = fmt.Sprint(vpnRuntimeSelfRecoveryMaxTries)
-				addVPNAuditAgentCleanupDetail(auditDetail, agentCleanupLogs)
-				if err := DB.Save(&session).Error; err != nil {
-					return nil, err
-				}
-				_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, auditDetail)
-				v.appendControlLog(session.SessionID, "runtime self recovery attempt %d/%d after %s failure: %s", attempt, vpnRuntimeSelfRecoveryMaxTries, result.Role, firstNonEmptyString(session.LastError, result.LastError, "unknown error"))
-				if err := v.restartExistingSessionWithAction(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, &session, policy, model.VPNActionStart); err != nil {
-					session.State = model.VPNStateFailed
-					if result.Role == model.VPNRoleEntry {
-						session.EntryState = model.VPNStateFailed
-					} else if result.Role == model.VPNRoleExit {
-						session.ExitState = model.VPNStateFailed
-					}
-					session.LastError = "self recovery failed: " + err.Error()
-					_ = DB.Save(&session).Error
-					v.finalizeVPNSessionRuntime(session.SessionID)
-					failDetail := vpnFailedRuntimeAuditDetail(result, false, nil)
-					failDetail["self_recovery"] = "failed"
-					failDetail["self_recovery_attempt"] = fmt.Sprint(attempt)
-					failDetail["self_recovery_error"] = err.Error()
-					addVPNAuditAgentCleanupDetail(failDetail, agentCleanupLogs)
-					_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, failDetail)
-					v.notifyRuntimeFailure(policy, &session, nil, agentCleanupLogs)
-				}
-				return &session, nil
+			handled, err := v.scheduleRuntimeSelfRecovery(policy, &session, result, agentCleanupLogs, time.Now())
+			if handled {
+				return &session, err
 			}
 		}
 		cleanupDispatched := false
@@ -629,10 +729,6 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		if wasRunning {
 			auditAction = model.VPNAuditActionStatus
 			auditDetail = vpnFailedRuntimeAuditDetail(result, cleanupDispatched, cleanupErrors)
-			if selfRecoveryExhausted {
-				auditDetail["self_recovery"] = "exhausted"
-				auditDetail["self_recovery_max_attempts"] = fmt.Sprint(vpnRuntimeSelfRecoveryMaxTries)
-			}
 			addVPNAuditAgentCleanupDetail(auditDetail, agentCleanupLogs)
 		}
 		_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, auditAction, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, auditDetail)
@@ -661,6 +757,7 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 		session.State = model.VPNStateStopped
 		session.EntryState = model.VPNStateStopped
 		session.ExitState = model.VPNStateStopped
+		resetVPNSessionRecovery(&session)
 		if result.StoppedAtUnix > 0 {
 			stoppedAt := time.Unix(result.StoppedAtUnix, 0)
 			session.StoppedAt = &stoppedAt
@@ -708,6 +805,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 				session.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
 				_ = DB.Save(&session).Error
 			}
+			if handled, err := v.scheduleRuntimeSelfRecoveryForLifecycleFailure(policy, &session, model.VPNRoleEntry, result.Action, session.LastError, model.VPNFailureReasonAgentOffline, cleanupErrors); handled {
+				return &session, err
+			}
 			auditDetail := map[string]string{
 				"stage":              vpnLifecycleFailureStage(result.Action, "entry_offline_after_exit_running"),
 				"cleanup_dispatched": "true",
@@ -736,6 +836,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 				session.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
 				_ = DB.Save(&session).Error
 			}
+			if handled, err := v.scheduleRuntimeSelfRecoveryForLifecycleFailure(policy, &session, model.VPNRoleEntry, result.Action, session.LastError, model.VPNFailureReasonUnknown, cleanupErrors); handled {
+				return &session, err
+			}
 			auditDetail := map[string]string{
 				"stage":              vpnLifecycleFailureStage(result.Action, "entry_token_missing_after_exit_running"),
 				"cleanup_dispatched": "true",
@@ -759,6 +862,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 				session.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
 				_ = DB.Save(&session).Error
 			}
+			if handled, err := v.scheduleRuntimeSelfRecoveryForLifecycleFailure(policy, &session, model.VPNRoleEntry, result.Action, session.LastError, model.VPNFailureReasonAgentOffline, cleanupErrors); handled {
+				return &session, err
+			}
 			auditDetail := map[string]string{
 				"stage":              vpnLifecycleFailureStage(result.Action, "entry_start_dispatch"),
 				"cleanup_dispatched": "true",
@@ -775,10 +881,24 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 	}
 
 	if session.EntryState == model.VPNStateRunning && session.ExitState == model.VPNStateRunning {
+		recoveryAttempt := session.RecoveryAttempt
+		recoveryReason := session.RecoveryReason
+		if session.RecoveryState != "" && session.RecoveryState != model.VPNRecoveryStateIdle {
+			resetVPNSessionRecovery(&session)
+		}
 		if session.State != model.VPNStateRunning {
 			session.State = model.VPNStateRunning
 			if err := DB.Save(&session).Error; err != nil {
 				return nil, err
+			}
+			if recoveryAttempt > 0 {
+				v.appendControlLog(session.SessionID, "runtime self recovery succeeded attempt=%d reason=%s", recoveryAttempt, recoveryReason)
+				_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, true, "runtime self recovery succeeded", map[string]string{
+					"self_recovery":         "succeeded",
+					"self_recovery_attempt": fmt.Sprint(recoveryAttempt),
+					"failure_reason":        recoveryReason,
+				})
+				sendVPNNotification(policy.NotificationGroupID, vpnNotificationBase("[代理隧道] 已自动恢复", policy, &session, "attempt "+fmt.Sprint(recoveryAttempt)), "")
 			}
 			if result.Action == model.VPNActionRestart {
 				v.appendControlLog(session.SessionID, "session restarted; entry and exit agents are running")
@@ -787,7 +907,9 @@ func (v *VPNClass) HandleControlResult(reporterServerID uint64, result model.VPN
 			} else if result.Action == model.VPNActionStart {
 				v.appendControlLog(session.SessionID, "session started; entry and exit agents are running")
 				_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStartSession, session.SessionID, session.EntryServerID, session.ExitServerID, true, "session started", vpnStartSuccessAuditDetail(policy, v.SessionLogs(session.SessionID)))
-				v.notifyStarted(policy, &session)
+				if recoveryAttempt == 0 {
+					v.notifyStarted(policy, &session)
+				}
 			}
 		} else if err := DB.Save(&session).Error; err != nil {
 			return nil, err
@@ -1024,7 +1146,7 @@ func (v *VPNClass) RestartSession(actor VPNActor, sessionID string) (*model.Agen
 	if err != nil {
 		policy = v.fallbackVPNPolicyForLostSession(&session)
 	}
-	if err := v.restartExistingSessionWithAction(actor, &session, policy, model.VPNActionRestart); err != nil {
+	if err := v.restartExistingSessionWithOptions(actor, &session, policy, model.VPNActionRestart, vpnSessionRestartOptions{}); err != nil {
 		return &session, err
 	}
 	return &session, nil
@@ -1271,6 +1393,7 @@ func (v *VPNClass) HandleRelayClosed(sessionID string, uploadBytes uint64, downl
 		_ = DB.Save(session).Error
 		return
 	}
+	wasRunning := session.State == model.VPNStateRunning
 	message := "relay disconnected"
 	if closeErr != nil {
 		message = closeErr.Error()
@@ -1280,6 +1403,24 @@ func (v *VPNClass) HandleRelayClosed(sessionID string, uploadBytes uint64, downl
 	cleanupErrors := v.dispatchSessionCleanupStops(session, policy)
 	if len(cleanupErrors) > 0 {
 		session.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+	}
+	result := model.VPNControlResult{
+		SessionID:         session.SessionID,
+		RuntimeInstanceID: session.RuntimeInstanceID,
+		Action:            model.VPNActionStatus,
+		Role:              model.VPNRoleEntry,
+		State:             model.VPNStateFailed,
+		FailureReason:     model.VPNFailureReasonRelayFailed,
+		LastError:         session.LastError,
+		StartedAtUnix:     session.StartedAt.Unix(),
+	}
+	if shouldAttemptVPNRuntimeSelfRecovery(policy, session, result, wasRunning, time.Now()) {
+		if handled, err := v.scheduleRuntimeSelfRecovery(policy, session, result, "", time.Now()); handled {
+			if err == nil {
+				return
+			}
+			log.Printf("NEZHA>> VPN relay self recovery schedule failed: session=%s err=%v", session.SessionID, err)
+		}
 	}
 	_ = DB.Save(session).Error
 	v.finalizeVPNSessionRuntime(session.SessionID)
@@ -1334,10 +1475,21 @@ func shouldDispatchVPNFailureCleanup(wasRunning bool, session *model.AgentVPNSes
 }
 
 func shouldAttemptVPNRuntimeSelfRecovery(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, result model.VPNControlResult, wasRunning bool, now time.Time) bool {
-	if policy == nil || session == nil || !policy.AutoRestart || !wasRunning {
+	if policy == nil || session == nil || !policy.AutoRestart {
 		return false
 	}
-	if result.Action != model.VPNActionStatus || result.State != model.VPNStateFailed {
+	recoveryRestarting := session.RecoveryState == model.VPNRecoveryStateRestarting && session.RecoveryAttempt > 0
+	if !wasRunning && !recoveryRestarting {
+		return false
+	}
+	if result.State != model.VPNStateFailed {
+		return false
+	}
+	if wasRunning {
+		if result.Action != model.VPNActionStatus {
+			return false
+		}
+	} else if result.Action != model.VPNActionStart && result.Action != model.VPNActionRestart && result.Action != model.VPNActionStatus {
 		return false
 	}
 	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
@@ -1346,7 +1498,137 @@ func shouldAttemptVPNRuntimeSelfRecovery(policy *model.AgentVPNPolicy, session *
 	if result.Role != model.VPNRoleEntry && result.Role != model.VPNRoleExit {
 		return false
 	}
-	return true
+	return vpnAutoRestartAllowsFailure(policy, result.FailureReason)
+}
+
+func vpnAutoRestartAllowsFailure(policy *model.AgentVPNPolicy, reason string) bool {
+	if policy == nil {
+		return false
+	}
+	normalizeVPNAutoRestartPolicy(policy)
+	switch strings.TrimSpace(reason) {
+	case "", model.VPNFailureReasonUnknown, model.VPNFailureReasonRelayFailed, model.VPNFailureReasonHeartbeatTimeout, model.VPNFailureReasonRuntimeInactive:
+		return policy.AutoRestartOnRelayFailure
+	case model.VPNFailureReasonExitEgressFailed:
+		return policy.AutoRestartOnExitFailure
+	case model.VPNFailureReasonAgentOffline:
+		return policy.AutoRestartOnAgentReconnect
+	default:
+		return policy.AutoRestartOnRelayFailure
+	}
+}
+
+func (v *VPNClass) scheduleRuntimeSelfRecovery(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, result model.VPNControlResult, agentCleanupLogs string, now time.Time) (bool, error) {
+	if policy == nil || session == nil {
+		return false, nil
+	}
+	normalizeVPNAutoRestartPolicy(policy)
+	recoveryStartedAt := session.RecoveryStartedAt
+	attempt := session.RecoveryAttempt + 1
+	if window := time.Duration(policy.AutoRestartWindowSeconds) * time.Second; window > 0 && recoveryStartedAt != nil && now.Sub(*recoveryStartedAt) > window {
+		recoveryStartedAt = nil
+		attempt = 1
+	}
+	if recoveryStartedAt == nil {
+		startedAt := now
+		recoveryStartedAt = &startedAt
+	}
+	if attempt > policy.AutoRestartMaxAttempts {
+		session.RecoveryState = model.VPNRecoveryStateExhausted
+		session.State = model.VPNStateFailed
+		if policy.AutoRestartMaxAttempts > 0 {
+			session.RecoveryAttempt = policy.AutoRestartMaxAttempts
+		}
+		session.RecoveryStartedAt = recoveryStartedAt
+		session.RecoveryNextAt = nil
+		session.RecoveryLastError = firstNonEmptyString(result.LastError, session.LastError, "runtime failure")
+		session.RecoveryReason = firstNonEmptyString(result.FailureReason, model.VPNFailureReasonUnknown)
+		session.LastError = "self recovery exhausted: " + session.RecoveryLastError
+		if err := DB.Save(session).Error; err != nil {
+			return true, err
+		}
+		v.finalizeVPNSessionRuntime(session.SessionID)
+		detail := vpnFailedRuntimeAuditDetail(result, false, nil)
+		detail["self_recovery"] = "exhausted"
+		detail["self_recovery_attempt"] = fmt.Sprint(session.RecoveryAttempt)
+		detail["self_recovery_max_attempts"] = fmt.Sprint(policy.AutoRestartMaxAttempts)
+		addVPNAuditAgentCleanupDetail(detail, agentCleanupLogs)
+		_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, detail)
+		v.notifyRuntimeFailure(policy, session, nil, agentCleanupLogs)
+		return true, nil
+	}
+	delay := vpnRecoveryBackoffDelay(policy, attempt)
+	nextAt := now.Add(delay)
+	session.State = model.VPNStateLost
+	session.RecoveryState = model.VPNRecoveryStateScheduled
+	session.RecoveryAttempt = attempt
+	session.RecoveryStartedAt = recoveryStartedAt
+	session.RecoveryNextAt = &nextAt
+	session.RecoveryLastError = firstNonEmptyString(result.LastError, session.LastError, "runtime failure")
+	session.RecoveryReason = firstNonEmptyString(result.FailureReason, model.VPNFailureReasonUnknown)
+	session.LastError = session.RecoveryLastError
+	v.finalizeVPNSessionRuntime(session.SessionID)
+	if err := DB.Save(session).Error; err != nil {
+		return true, err
+	}
+	detail := vpnFailedRuntimeAuditDetail(result, false, nil)
+	if delay <= 0 {
+		detail["self_recovery"] = "attempted"
+	} else {
+		detail["self_recovery"] = "scheduled"
+	}
+	detail["self_recovery_attempt"] = fmt.Sprint(attempt)
+	detail["self_recovery_max_attempts"] = fmt.Sprint(policy.AutoRestartMaxAttempts)
+	detail["self_recovery_delay_seconds"] = fmt.Sprint(uint32(delay.Seconds()))
+	detail["failure_reason"] = session.RecoveryReason
+	addVPNAuditAgentCleanupDetail(detail, agentCleanupLogs)
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, detail)
+	v.appendControlLog(session.SessionID, "runtime self recovery scheduled attempt %d/%d after %s reason=%s error=%s", attempt, policy.AutoRestartMaxAttempts, delay, session.RecoveryReason, session.RecoveryLastError)
+	if delay <= 0 {
+		v.runScheduledRuntimeSelfRecovery(session.SessionID)
+		_ = DB.Where("session_id = ?", session.SessionID).First(session).Error
+		return true, nil
+	}
+	v.armRuntimeSelfRecoveryTimer(session.SessionID, nextAt)
+	return true, nil
+}
+
+func (v *VPNClass) scheduleRuntimeSelfRecoveryForLifecycleFailure(policy *model.AgentVPNPolicy, session *model.AgentVPNSession, role string, action string, reason string, failureReason string, cleanupErrors []string) (bool, error) {
+	now := time.Now()
+	result := model.VPNControlResult{
+		SessionID:         session.SessionID,
+		RuntimeInstanceID: session.RuntimeInstanceID,
+		Action:            action,
+		Role:              role,
+		State:             model.VPNStateFailed,
+		FailureReason:     firstNonEmptyString(failureReason, model.VPNFailureReasonRelayFailed),
+		LastError:         reason,
+		StartedAtUnix:     session.StartedAt.Unix(),
+	}
+	if len(cleanupErrors) > 0 {
+		result.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+	}
+	if !shouldAttemptVPNRuntimeSelfRecovery(policy, session, result, false, now) {
+		return false, nil
+	}
+	return v.scheduleRuntimeSelfRecovery(policy, session, result, "", now)
+}
+
+func vpnRecoveryBackoffDelay(policy *model.AgentVPNPolicy, attempt uint32) time.Duration {
+	normalizeVPNAutoRestartPolicy(policy)
+	backoff := policy.AutoRestartBackoffSeconds
+	if len(backoff) == 0 {
+		backoff = defaultVPNAutoRestartBackoff()
+	}
+	idx := int(attempt)
+	if idx <= 0 {
+		idx = 1
+	}
+	idx--
+	if idx >= len(backoff) {
+		idx = len(backoff) - 1
+	}
+	return time.Duration(backoff[idx]) * time.Second
 }
 
 func normalizeVPNInactiveRuntimeStatusResult(session *model.AgentVPNSession, result *model.VPNControlResult) bool {
@@ -1360,27 +1642,11 @@ func normalizeVPNInactiveRuntimeStatusResult(session *model.AgentVPNSession, res
 		return false
 	}
 	result.State = model.VPNStateFailed
+	result.FailureReason = model.VPNFailureReasonRuntimeInactive
 	if strings.TrimSpace(result.LastError) == "" {
 		result.LastError = "entry runtime inactive while session is running"
 	}
 	return true
-}
-
-func (v *VPNClass) runtimeSelfRecoveryAttempts(sessionID string) int {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return 0
-	}
-	var count int64
-	if err := DB.Model(&model.AgentVPNAuditLog{}).
-		Where("session_id = ? AND action = ? AND detail_raw LIKE ?", sessionID, model.VPNAuditActionStatus, "%\"self_recovery\":\"attempted\"%").
-		Count(&count).Error; err != nil {
-		return vpnRuntimeSelfRecoveryMaxTries
-	}
-	if count > int64(vpnRuntimeSelfRecoveryMaxTries) {
-		return vpnRuntimeSelfRecoveryMaxTries
-	}
-	return int(count)
 }
 
 func (v *VPNClass) startPreparedVPNSession(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, action string) (*model.AgentVPNSession, error) {
@@ -1459,6 +1725,9 @@ func (v *VPNClass) fallbackDirectStartFailure(policy *model.AgentVPNPolicy, sess
 		return nil, false, nil
 	}
 	if session.RelayMode != model.VPNRelayModeDirect || result.Role != model.VPNRoleEntry {
+		return nil, false, nil
+	}
+	if normalizeVPNRelayPreference(policyRelayMode(policy)) != model.VPNRelayModeAuto {
 		return nil, false, nil
 	}
 	if result.Action != model.VPNActionStart && result.Action != model.VPNActionRestart {
@@ -1653,7 +1922,7 @@ func (v *VPNClass) CheckActiveSessionStatuses() error {
 
 func (v *VPNClass) ExpireSessions(now time.Time) error {
 	var sessions []model.AgentVPNSession
-	if err := DB.Where("state IN ? AND expires_at <= ?", []string{model.VPNStateStarting, model.VPNStateRunning, model.VPNStateUnknown}, now).Find(&sessions).Error; err != nil {
+	if err := DB.Where("(state IN ? OR recovery_state IN ?) AND expires_at <= ?", []string{model.VPNStateStarting, model.VPNStateRunning, model.VPNStateUnknown}, []string{model.VPNRecoveryStateScheduled, model.VPNRecoveryStateRestarting}, now).Find(&sessions).Error; err != nil {
 		return err
 	}
 	for i := range sessions {
@@ -1923,10 +2192,10 @@ func (v *VPNClass) deliverPolicyStatusResult(reporterServerID uint64, result mod
 }
 
 func (v *VPNClass) restartExistingSession(session *model.AgentVPNSession, policy *model.AgentVPNPolicy) error {
-	return v.restartExistingSessionWithAction(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, session, policy, model.VPNActionStart)
+	return v.restartExistingSessionWithOptions(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, session, policy, model.VPNActionStart, vpnSessionRestartOptions{})
 }
 
-func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *model.AgentVPNSession, policy *model.AgentVPNPolicy, action string) error {
+func (v *VPNClass) restartExistingSessionWithOptions(actor VPNActor, session *model.AgentVPNSession, policy *model.AgentVPNPolicy, action string, options vpnSessionRestartOptions) error {
 	if err := validateVPNPolicyRuntime(policy); err != nil {
 		v.recordRestartSessionPreflightFailure(actor, session, policy, err, "policy_validation", action)
 		return err
@@ -1963,10 +2232,16 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 		v.recordRestartSessionPreflightFailure(actor, session, policy, err, "exit_stream_id_generation", action)
 		return err
 	}
+	runtimeInstanceID, err := VPNIDGenerator("vpn_runtime_")
+	if err != nil {
+		v.recordRestartSessionPreflightFailure(actor, session, policy, err, "runtime_instance_id_generation", action)
+		return err
+	}
 
 	closeVPNRelay(session.SessionID)
 	now := time.Now()
 	session.TokenHash = hashVPNToken(token)
+	session.RuntimeInstanceID = runtimeInstanceID
 	session.Mode = policy.Mode
 	session.RuleMode = normalizeVPNRuleMode(policy.RuleMode)
 	session.RelayMode = v.preferredVPNRelayMode(session, policy)
@@ -1980,6 +2255,13 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	session.TunName = policy.TunName
 	session.SetSystemProxy = policy.SetSystemProxy
 	session.LastError = ""
+	if options.runtimeSelfRecovery {
+		session.RecoveryState = model.VPNRecoveryStateRestarting
+		session.RecoveryNextAt = nil
+	} else {
+		v.cancelRuntimeSelfRecoveryTimer(session.SessionID)
+		resetVPNSessionRecovery(session)
+	}
 	session.StoppedAt = nil
 	session.StartedAt = now
 	if err := DB.Save(session).Error; err != nil {
@@ -2002,6 +2284,13 @@ func (v *VPNClass) restartExistingSessionWithAction(actor VPNActor, session *mod
 	}
 
 	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, action, token); err != nil {
+		if options.runtimeSelfRecovery {
+			session.State = model.VPNStateLost
+			session.ExitState = model.VPNStateLost
+			session.LastError = err.Error()
+			v.finalizeVPNSessionRuntime(session.SessionID)
+			return err
+		}
 		session.State = model.VPNStateFailed
 		session.ExitState = model.VPNStateFailed
 		session.LastError = err.Error()
@@ -2045,6 +2334,7 @@ func (v *VPNClass) expireSession(session *model.AgentVPNSession, now time.Time) 
 	session.State = model.VPNStateStopped
 	session.EntryState = model.VPNStateStopped
 	session.ExitState = model.VPNStateStopped
+	resetVPNSessionRecovery(session)
 	session.LastError = "session expired"
 	if len(stopErrors) > 0 {
 		session.LastError += "; cleanup dispatch failed: " + strings.Join(stopErrors, "; ")
@@ -2074,6 +2364,7 @@ func (v *VPNClass) finalizeVPNSessionRuntime(sessionID string) {
 	if sessionID == "" {
 		return
 	}
+	v.cancelRuntimeSelfRecoveryTimer(sessionID)
 	closeVPNRelay(sessionID)
 	v.mu.Lock()
 	delete(v.sessionTokens, sessionID)
@@ -2122,6 +2413,9 @@ func (v *VPNClass) validatePolicyForm(actor VPNActor, form model.AgentVPNPolicyF
 		return err
 	}
 	if err := validateVPNExitNAT(form.ExitNATEnabled, form.ExitNATHost, form.ExitNATPort); err != nil {
+		return err
+	}
+	if err := validateVPNAutoRestartSettings(form); err != nil {
 		return err
 	}
 	mode := normalizeVPNMode(form.Mode)
@@ -2240,42 +2534,48 @@ func vpnPolicyAuditDetail(policy *model.AgentVPNPolicy) map[string]string {
 		return nil
 	}
 	return map[string]string{
-		"policy_id":                  fmt.Sprint(policy.ID),
-		"policy_name":                policy.Name,
-		"mode":                       policy.Mode,
-		"rule_mode":                  policy.RuleMode,
-		"relay_mode":                 policy.RelayMode,
-		"direct_transport":           normalizeVPNDirectTransport(policy.DirectTransport),
-		"direct_host":                policy.DirectHost,
-		"direct_port":                fmt.Sprint(policy.DirectPort),
-		"direct_tls_server_name":     policy.DirectTLSServerName,
-		"direct_ws_path":             normalizeVPNDirectWSPath(policy.DirectWSPath),
-		"direct_tls_verify":          fmt.Sprint(policy.DirectTLSVerify),
-		"direct_cert_sha256":         policy.DirectCertSHA256,
-		"exit_nat_enabled":           fmt.Sprint(policy.ExitNATEnabled),
-		"exit_nat_host":              policy.ExitNATHost,
-		"exit_nat_port":              fmt.Sprint(policy.ExitNATPort),
-		"domains":                    strings.Join(policy.Domains, ","),
-		"cidrs":                      strings.Join(policy.CIDRs, ","),
-		"direct_cidrs":               strings.Join(policy.DirectCIDRs, ","),
-		"listen_http":                policy.ListenHTTP,
-		"listen_socks":               policy.ListenSOCKS,
-		"tun_name":                   policy.TunName,
-		"dns_server":                 policy.DNSServer,
-		"expires_seconds":            fmt.Sprint(policy.ExpiresSeconds),
-		"max_upload_bytes":           fmt.Sprint(policy.MaxUploadBytes),
-		"max_download_bytes":         fmt.Sprint(policy.MaxDownloadBytes),
-		"max_connections":            fmt.Sprint(policy.MaxConnections),
-		"idle_timeout_seconds":       fmt.Sprint(policy.IdleTimeoutSeconds),
-		"notification_group_id":      fmt.Sprint(policy.NotificationGroupID),
-		"auto_restart":               fmt.Sprint(policy.AutoRestart),
-		"set_system_proxy":           fmt.Sprint(policy.SetSystemProxy),
-		"tun_health_url":             policy.TunHealthURL,
-		"tun_health_timeout_seconds": fmt.Sprint(policy.TunHealthTimeoutSeconds),
-		"egress_probe_url":           policy.EgressProbeURL,
-		"core_version":               policy.CoreVersion,
-		"core_download_url":          policy.CoreDownloadURL,
-		"core_sha256":                policy.CoreSHA256,
+		"policy_id":                       fmt.Sprint(policy.ID),
+		"policy_name":                     policy.Name,
+		"mode":                            policy.Mode,
+		"rule_mode":                       policy.RuleMode,
+		"relay_mode":                      policy.RelayMode,
+		"direct_transport":                normalizeVPNDirectTransport(policy.DirectTransport),
+		"direct_host":                     policy.DirectHost,
+		"direct_port":                     fmt.Sprint(policy.DirectPort),
+		"direct_tls_server_name":          policy.DirectTLSServerName,
+		"direct_ws_path":                  normalizeVPNDirectWSPath(policy.DirectWSPath),
+		"direct_tls_verify":               fmt.Sprint(policy.DirectTLSVerify),
+		"direct_cert_sha256":              policy.DirectCertSHA256,
+		"exit_nat_enabled":                fmt.Sprint(policy.ExitNATEnabled),
+		"exit_nat_host":                   policy.ExitNATHost,
+		"exit_nat_port":                   fmt.Sprint(policy.ExitNATPort),
+		"domains":                         strings.Join(policy.Domains, ","),
+		"cidrs":                           strings.Join(policy.CIDRs, ","),
+		"direct_cidrs":                    strings.Join(policy.DirectCIDRs, ","),
+		"listen_http":                     policy.ListenHTTP,
+		"listen_socks":                    policy.ListenSOCKS,
+		"tun_name":                        policy.TunName,
+		"dns_server":                      policy.DNSServer,
+		"expires_seconds":                 fmt.Sprint(policy.ExpiresSeconds),
+		"max_upload_bytes":                fmt.Sprint(policy.MaxUploadBytes),
+		"max_download_bytes":              fmt.Sprint(policy.MaxDownloadBytes),
+		"max_connections":                 fmt.Sprint(policy.MaxConnections),
+		"idle_timeout_seconds":            fmt.Sprint(policy.IdleTimeoutSeconds),
+		"notification_group_id":           fmt.Sprint(policy.NotificationGroupID),
+		"auto_restart":                    fmt.Sprint(policy.AutoRestart),
+		"auto_restart_max_attempts":       fmt.Sprint(policy.AutoRestartMaxAttempts),
+		"auto_restart_backoff_seconds":    formatVPNUint32List(policy.AutoRestartBackoffSeconds),
+		"auto_restart_window_seconds":     fmt.Sprint(policy.AutoRestartWindowSeconds),
+		"auto_restart_on_relay_failure":   fmt.Sprint(policy.AutoRestartOnRelayFailure),
+		"auto_restart_on_exit_failure":    fmt.Sprint(policy.AutoRestartOnExitFailure),
+		"auto_restart_on_agent_reconnect": fmt.Sprint(policy.AutoRestartOnAgentReconnect),
+		"set_system_proxy":                fmt.Sprint(policy.SetSystemProxy),
+		"tun_health_url":                  policy.TunHealthURL,
+		"tun_health_timeout_seconds":      fmt.Sprint(policy.TunHealthTimeoutSeconds),
+		"egress_probe_url":                policy.EgressProbeURL,
+		"core_version":                    policy.CoreVersion,
+		"core_download_url":               policy.CoreDownloadURL,
+		"core_sha256":                     policy.CoreSHA256,
 	}
 }
 
@@ -2668,18 +2968,19 @@ func buildVPNControlRequest(session *model.AgentVPNSession, policy *model.AgentV
 		relayStreamID = session.ExitStreamID
 	}
 	req := model.VPNControlRequest{
-		SessionID:     session.SessionID,
-		Action:        action,
-		Role:          role,
-		Mode:          policy.Mode,
-		RelayMode:     normalizeVPNRelayMode(session.RelayMode),
-		PeerServerID:  peerServerID,
-		RelayStreamID: relayStreamID,
-		Token:         token,
-		ExpiresAtUnix: session.ExpiresAt.Unix(),
-		ListenHTTP:    policy.ListenHTTP,
-		ListenSOCKS:   policy.ListenSOCKS,
-		TunName:       policy.TunName,
+		SessionID:         session.SessionID,
+		RuntimeInstanceID: session.RuntimeInstanceID,
+		Action:            action,
+		Role:              role,
+		Mode:              policy.Mode,
+		RelayMode:         normalizeVPNRelayMode(session.RelayMode),
+		PeerServerID:      peerServerID,
+		RelayStreamID:     relayStreamID,
+		Token:             token,
+		ExpiresAtUnix:     session.ExpiresAt.Unix(),
+		ListenHTTP:        policy.ListenHTTP,
+		ListenSOCKS:       policy.ListenSOCKS,
+		TunName:           policy.TunName,
 		Rules: model.VPNRules{
 			Mode:        policy.RuleMode,
 			Domains:     policy.Domains,
@@ -2887,6 +3188,23 @@ func reporterMatchesVPNRole(reporterServerID uint64, role string, session *model
 	}
 }
 
+func isStaleVPNRuntimeResult(session *model.AgentVPNSession, result model.VPNControlResult) bool {
+	if session == nil {
+		return false
+	}
+	switch result.Action {
+	case model.VPNActionPrepare, model.VPNActionRulesPrepare, model.VPNActionRulesCleanup, model.VPNActionCleanup:
+		return false
+	}
+	if runtimeID := strings.TrimSpace(result.RuntimeInstanceID); runtimeID != "" && strings.TrimSpace(session.RuntimeInstanceID) != "" {
+		return runtimeID != strings.TrimSpace(session.RuntimeInstanceID)
+	}
+	if result.StartedAtUnix > 0 && !session.StartedAt.IsZero() {
+		return result.StartedAtUnix != session.StartedAt.Unix()
+	}
+	return false
+}
+
 func actorCanUseVPNServer(actor VPNActor, serverID uint64) bool {
 	server, ok := ServerShared.Get(serverID)
 	if !ok || server == nil {
@@ -3089,6 +3407,28 @@ func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]s
 	if value := strings.TrimSpace(detail["auto_restart"]); value != "" {
 		policy.AutoRestart = strings.EqualFold(value, "true")
 	}
+	if value := strings.TrimSpace(detail["auto_restart_max_attempts"]); value != "" {
+		if parsed, err := strconv.ParseUint(value, 10, 32); err == nil {
+			policy.AutoRestartMaxAttempts = uint32(parsed)
+		}
+	}
+	if value := strings.TrimSpace(detail["auto_restart_backoff_seconds"]); value != "" {
+		policy.AutoRestartBackoffSeconds = parseVPNUint32List(value)
+	}
+	if value := strings.TrimSpace(detail["auto_restart_window_seconds"]); value != "" {
+		if parsed, err := strconv.ParseUint(value, 10, 32); err == nil {
+			policy.AutoRestartWindowSeconds = uint32(parsed)
+		}
+	}
+	if value := strings.TrimSpace(detail["auto_restart_on_relay_failure"]); value != "" {
+		policy.AutoRestartOnRelayFailure = strings.EqualFold(value, "true")
+	}
+	if value := strings.TrimSpace(detail["auto_restart_on_exit_failure"]); value != "" {
+		policy.AutoRestartOnExitFailure = strings.EqualFold(value, "true")
+	}
+	if value := strings.TrimSpace(detail["auto_restart_on_agent_reconnect"]); value != "" {
+		policy.AutoRestartOnAgentReconnect = strings.EqualFold(value, "true")
+	}
 	if value := strings.TrimSpace(detail["set_system_proxy"]); value != "" {
 		policy.SetSystemProxy = strings.EqualFold(value, "true")
 	}
@@ -3112,6 +3452,7 @@ func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]s
 	if value := strings.TrimSpace(detail["core_sha256"]); value != "" {
 		policy.CoreSHA256 = value
 	}
+	normalizeVPNAutoRestartPolicy(policy)
 }
 
 func validateVPNPolicyRuntime(policy *model.AgentVPNPolicy) error {
@@ -3541,6 +3882,24 @@ func validateVPNEgressProbeURL(probeURL string) error {
 	return nil
 }
 
+func validateVPNAutoRestartSettings(form model.AgentVPNPolicyForm) error {
+	if form.AutoRestartMaxAttempts > maxVPNAutoRestartAttempts {
+		return fmt.Errorf("auto restart max attempts must be <= %d", maxVPNAutoRestartAttempts)
+	}
+	if form.AutoRestartWindowSeconds > 24*60*60 {
+		return errors.New("auto restart window must be <= 86400 seconds")
+	}
+	if len(form.AutoRestartBackoffSeconds) > maxVPNAutoRestartAttempts {
+		return fmt.Errorf("auto restart backoff list must contain <= %d values", maxVPNAutoRestartAttempts)
+	}
+	for _, value := range form.AutoRestartBackoffSeconds {
+		if value > maxVPNAutoRestartBackoffSeconds {
+			return fmt.Errorf("auto restart backoff seconds must be <= %d", maxVPNAutoRestartBackoffSeconds)
+		}
+	}
+	return nil
+}
+
 func validateVPNCoreSpec(downloadURL string, sha256Value string) error {
 	downloadURL = strings.TrimSpace(downloadURL)
 	if downloadURL != "" {
@@ -3579,52 +3938,122 @@ func normalizeVPNStringList(values []string) []string {
 	return out
 }
 
+func formatVPNUint32List(values []uint32) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprint(value))
+	}
+	return strings.Join(parts, ",")
+}
+
+func parseVPNUint32List(value string) []uint32 {
+	parts := strings.Split(value, ",")
+	out := make([]uint32, 0, len(parts))
+	for _, part := range parts {
+		parsed, err := strconv.ParseUint(strings.TrimSpace(part), 10, 32)
+		if err != nil {
+			continue
+		}
+		out = append(out, uint32(parsed))
+	}
+	return out
+}
+
+func defaultVPNAutoRestartBackoff() []uint32 {
+	return append([]uint32(nil), defaultVPNAutoRestartBackoffSeconds...)
+}
+
+func normalizeVPNAutoRestartBackoff(values []uint32) []uint32 {
+	out := make([]uint32, 0, len(values))
+	for _, value := range values {
+		if value > maxVPNAutoRestartBackoffSeconds {
+			value = maxVPNAutoRestartBackoffSeconds
+		}
+		out = append(out, value)
+		if len(out) >= maxVPNAutoRestartAttempts {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return defaultVPNAutoRestartBackoff()
+	}
+	return out
+}
+
+func normalizeVPNAutoRestartPolicy(policy *model.AgentVPNPolicy) {
+	if policy == nil {
+		return
+	}
+	if policy.AutoRestartMaxAttempts == 0 {
+		policy.AutoRestartMaxAttempts = defaultVPNAutoRestartMaxAttempts
+	}
+	if policy.AutoRestartMaxAttempts > maxVPNAutoRestartAttempts {
+		policy.AutoRestartMaxAttempts = maxVPNAutoRestartAttempts
+	}
+	policy.AutoRestartBackoffSeconds = normalizeVPNAutoRestartBackoff(policy.AutoRestartBackoffSeconds)
+	if policy.AutoRestartWindowSeconds == 0 {
+		policy.AutoRestartWindowSeconds = defaultVPNAutoRestartWindowSeconds
+	}
+	if policy.AutoRestart && !policy.AutoRestartOnRelayFailure && !policy.AutoRestartOnExitFailure && !policy.AutoRestartOnAgentReconnect {
+		policy.AutoRestartOnRelayFailure = true
+		policy.AutoRestartOnExitFailure = true
+		policy.AutoRestartOnAgentReconnect = true
+	}
+}
+
 func vpnPolicyFromForm(userID uint64, form model.AgentVPNPolicyForm) *model.AgentVPNPolicy {
 	policy := &model.AgentVPNPolicy{
 		Common: model.Common{
 			UserID: userID,
 		},
-		Name:                    strings.TrimSpace(form.Name),
-		EntryServerID:           form.EntryServerID,
-		ExitServerID:            form.ExitServerID,
-		Mode:                    normalizeVPNMode(form.Mode),
-		RuleMode:                normalizeVPNRuleMode(form.RuleMode),
-		RelayMode:               normalizeVPNRelayPreference(form.RelayMode),
-		DirectTransport:         normalizeVPNDirectTransport(form.DirectTransport),
-		DirectHost:              strings.TrimSpace(form.DirectHost),
-		DirectPort:              form.DirectPort,
-		DirectTLSServerName:     strings.TrimSpace(form.DirectTLSServerName),
-		DirectWSPath:            normalizeVPNDirectWSPath(form.DirectWSPath),
-		DirectTLSVerify:         form.DirectTLSVerify,
-		DirectCertSHA256:        normalizeVPNDirectSHA256(form.DirectCertSHA256),
-		ExitNATEnabled:          form.ExitNATEnabled,
-		ExitNATHost:             strings.TrimSpace(form.ExitNATHost),
-		ExitNATPort:             form.ExitNATPort,
-		Domains:                 normalizeVPNStringList(form.Domains),
-		CIDRs:                   normalizeVPNStringList(form.CIDRs),
-		DirectCIDRs:             normalizeVPNStringList(form.DirectCIDRs),
-		ListenHTTP:              strings.TrimSpace(form.ListenHTTP),
-		ListenSOCKS:             strings.TrimSpace(form.ListenSOCKS),
-		TunName:                 strings.TrimSpace(form.TunName),
-		DNSServer:               strings.TrimSpace(form.DNSServer),
-		ExpiresSeconds:          normalizeVPNExpires(form.ExpiresSeconds),
-		MaxUploadBytes:          form.MaxUploadBytes,
-		MaxDownloadBytes:        form.MaxDownloadBytes,
-		MaxConnections:          form.MaxConnections,
-		IdleTimeoutSeconds:      form.IdleTimeoutSeconds,
-		NotificationGroupID:     form.NotificationGroupID,
-		AutoRestart:             form.AutoRestart,
-		SetSystemProxy:          form.SetSystemProxy,
-		TunHealthURL:            strings.TrimSpace(form.TunHealthURL),
-		TunHealthTimeoutSeconds: normalizeVPNTunHealthTimeout(form.TunHealthTimeoutSeconds),
-		EgressProbeURL:          strings.TrimSpace(form.EgressProbeURL),
-		CoreVersion:             strings.TrimSpace(form.CoreVersion),
-		CoreDownloadURL:         strings.TrimSpace(form.CoreDownloadURL),
-		CoreSHA256:              strings.TrimSpace(form.CoreSHA256),
+		Name:                        strings.TrimSpace(form.Name),
+		EntryServerID:               form.EntryServerID,
+		ExitServerID:                form.ExitServerID,
+		Mode:                        normalizeVPNMode(form.Mode),
+		RuleMode:                    normalizeVPNRuleMode(form.RuleMode),
+		RelayMode:                   normalizeVPNRelayPreference(form.RelayMode),
+		DirectTransport:             normalizeVPNDirectTransport(form.DirectTransport),
+		DirectHost:                  strings.TrimSpace(form.DirectHost),
+		DirectPort:                  form.DirectPort,
+		DirectTLSServerName:         strings.TrimSpace(form.DirectTLSServerName),
+		DirectWSPath:                normalizeVPNDirectWSPath(form.DirectWSPath),
+		DirectTLSVerify:             form.DirectTLSVerify,
+		DirectCertSHA256:            normalizeVPNDirectSHA256(form.DirectCertSHA256),
+		ExitNATEnabled:              form.ExitNATEnabled,
+		ExitNATHost:                 strings.TrimSpace(form.ExitNATHost),
+		ExitNATPort:                 form.ExitNATPort,
+		Domains:                     normalizeVPNStringList(form.Domains),
+		CIDRs:                       normalizeVPNStringList(form.CIDRs),
+		DirectCIDRs:                 normalizeVPNStringList(form.DirectCIDRs),
+		ListenHTTP:                  strings.TrimSpace(form.ListenHTTP),
+		ListenSOCKS:                 strings.TrimSpace(form.ListenSOCKS),
+		TunName:                     strings.TrimSpace(form.TunName),
+		DNSServer:                   strings.TrimSpace(form.DNSServer),
+		ExpiresSeconds:              normalizeVPNExpires(form.ExpiresSeconds),
+		MaxUploadBytes:              form.MaxUploadBytes,
+		MaxDownloadBytes:            form.MaxDownloadBytes,
+		MaxConnections:              form.MaxConnections,
+		IdleTimeoutSeconds:          form.IdleTimeoutSeconds,
+		NotificationGroupID:         form.NotificationGroupID,
+		AutoRestart:                 form.AutoRestart,
+		AutoRestartMaxAttempts:      form.AutoRestartMaxAttempts,
+		AutoRestartBackoffSeconds:   normalizeVPNAutoRestartBackoff(form.AutoRestartBackoffSeconds),
+		AutoRestartWindowSeconds:    form.AutoRestartWindowSeconds,
+		AutoRestartOnRelayFailure:   form.AutoRestartOnRelayFailure,
+		AutoRestartOnExitFailure:    form.AutoRestartOnExitFailure,
+		AutoRestartOnAgentReconnect: form.AutoRestartOnAgentReconnect,
+		SetSystemProxy:              form.SetSystemProxy,
+		TunHealthURL:                strings.TrimSpace(form.TunHealthURL),
+		TunHealthTimeoutSeconds:     normalizeVPNTunHealthTimeout(form.TunHealthTimeoutSeconds),
+		EgressProbeURL:              strings.TrimSpace(form.EgressProbeURL),
+		CoreVersion:                 strings.TrimSpace(form.CoreVersion),
+		CoreDownloadURL:             strings.TrimSpace(form.CoreDownloadURL),
+		CoreSHA256:                  strings.TrimSpace(form.CoreSHA256),
 	}
 	if policy.Name == "" {
 		policy.Name = fmt.Sprintf("Proxy Tunnel %d -> %d", policy.EntryServerID, policy.ExitServerID)
 	}
+	normalizeVPNAutoRestartPolicy(policy)
 	return policy
 }
 
@@ -3984,7 +4413,14 @@ func shouldAutoRestartVPNSession(policy *model.AgentVPNPolicy, session *model.Ag
 	if policy == nil || session == nil || !policy.AutoRestart {
 		return false
 	}
+	normalizeVPNAutoRestartPolicy(policy)
+	if !policy.AutoRestartOnAgentReconnect {
+		return false
+	}
 	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
+		return false
+	}
+	if session.RecoveryState == model.VPNRecoveryStateScheduled {
 		return false
 	}
 	return session.State == model.VPNStateLost
@@ -4065,6 +4501,7 @@ func cloneVPNPolicy(policy *model.AgentVPNPolicy) *model.AgentVPNPolicy {
 	clone.Domains = append([]string(nil), policy.Domains...)
 	clone.CIDRs = append([]string(nil), policy.CIDRs...)
 	clone.DirectCIDRs = append([]string(nil), policy.DirectCIDRs...)
+	clone.AutoRestartBackoffSeconds = append([]uint32(nil), policy.AutoRestartBackoffSeconds...)
 	return &clone
 }
 
