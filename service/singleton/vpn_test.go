@@ -2691,6 +2691,67 @@ func TestVPNRuntimeSelfRecoveryExhaustsAfterConsecutiveStartFailure(t *testing.T
 	}
 }
 
+func TestVPNAutoRestartSettingsPreserveExplicitDisabledTriggers(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                          "explicit disabled recovery triggers",
+		EntryServerID:                 1,
+		ExitServerID:                  2,
+		Mode:                          model.VPNModeSystemProxy,
+		RuleMode:                      model.VPNRuleModeGlobal,
+		ListenSOCKS:                   "127.0.0.1:1080",
+		ExpiresSeconds:                3600,
+		AutoRestart:                   true,
+		AutoRestartMaxAttempts:        2,
+		AutoRestartBackoffSeconds:     []uint32{0},
+		AutoRestartWindowSeconds:      0,
+		AutoRestartOnRelayFailure:     false,
+		AutoRestartOnExitFailure:      false,
+		AutoRestartOnAgentReconnect:   false,
+		AutoRestartSettingsConfigured: true,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	if policy.AutoRestartWindowSeconds != 0 {
+		t.Fatalf("explicit auto restart window 0 must be preserved, got %d", policy.AutoRestartWindowSeconds)
+	}
+	if policy.AutoRestartOnRelayFailure || policy.AutoRestartOnExitFailure || policy.AutoRestartOnAgentReconnect {
+		t.Fatalf("explicit disabled auto restart triggers must be preserved: relay=%t exit=%t reconnect=%t",
+			policy.AutoRestartOnRelayFailure, policy.AutoRestartOnExitFailure, policy.AutoRestartOnAgentReconnect)
+	}
+
+	session := startAndRunTestVPNSession(t, h, actor, policy)
+	failed, err := h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID:     session.SessionID,
+		Action:        model.VPNActionStatus,
+		Role:          model.VPNRoleEntry,
+		State:         model.VPNStateFailed,
+		FailureReason: model.VPNFailureReasonRelayFailed,
+		LastError:     "relay closed",
+	})
+	if err != nil {
+		t.Fatalf("handle runtime failure: %v", err)
+	}
+	if failed.State != model.VPNStateFailed || failed.RecoveryState == model.VPNRecoveryStateScheduled || failed.RecoveryState == model.VPNRecoveryStateRestarting {
+		t.Fatalf("disabled recovery triggers must not self recover, state=%q recovery=%q", failed.State, failed.RecoveryState)
+	}
+}
+
+func TestVPNAutoRestartLegacyPolicyDefaultsTriggers(t *testing.T) {
+	policy := &model.AgentVPNPolicy{
+		AutoRestart: true,
+	}
+	normalizeVPNAutoRestartPolicy(policy)
+	if !policy.AutoRestartOnRelayFailure || !policy.AutoRestartOnExitFailure || !policy.AutoRestartOnAgentReconnect {
+		t.Fatalf("legacy auto_restart policy must default all triggers on: %#v", policy)
+	}
+	if policy.AutoRestartWindowSeconds != defaultVPNAutoRestartWindowSeconds {
+		t.Fatalf("legacy auto_restart policy must default window, got %d", policy.AutoRestartWindowSeconds)
+	}
+}
+
 func TestVPNRuntimeFailureDoesNotSelfRecoverWhenAutoRestartDisabled(t *testing.T) {
 	h := newVPNHarness(t)
 	actor := VPNActor{UserID: 100, Role: model.RoleMember}
@@ -3079,6 +3140,48 @@ func TestVPNIgnoresStaleRuntimeInstanceResult(t *testing.T) {
 	}
 	if stored.State != model.VPNStateStarting || stored.RuntimeInstanceID != restarting.RuntimeInstanceID || stored.LastError != "" {
 		t.Fatalf("stale runtime result persisted mutation, state=%q runtime=%q error=%q", stored.State, stored.RuntimeInstanceID, stored.LastError)
+	}
+}
+
+func TestVPNIgnoresStaleRuntimeStopResult(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+	session := startAndRunTestVPNSession(t, h, actor, policy)
+	oldRuntimeID := session.RuntimeInstanceID
+	if oldRuntimeID == "" {
+		t.Fatal("started session must have runtime instance id")
+	}
+
+	restarting, err := h.vpn.RestartSession(actor, session.SessionID)
+	if err != nil {
+		t.Fatalf("restart session: %v", err)
+	}
+	if restarting.RuntimeInstanceID == "" || restarting.RuntimeInstanceID == oldRuntimeID {
+		t.Fatalf("restart must rotate runtime instance id, old=%q new=%q", oldRuntimeID, restarting.RuntimeInstanceID)
+	}
+	readVPNTask(t, h.exitStream)
+
+	got, err := h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID:         session.SessionID,
+		RuntimeInstanceID: oldRuntimeID,
+		Action:            model.VPNActionStop,
+		Role:              model.VPNRoleEntry,
+		State:             model.VPNStateStopped,
+		StoppedAtUnix:     time.Now().Unix(),
+	})
+	if err != nil {
+		t.Fatalf("stale stop result should be ignored without error: %v", err)
+	}
+	if got.State != model.VPNStateStarting || got.RuntimeInstanceID != restarting.RuntimeInstanceID {
+		t.Fatalf("stale stop result must not stop current session, state=%q runtime=%q", got.State, got.RuntimeInstanceID)
+	}
+	var stored model.AgentVPNSession
+	if err := DB.Where("session_id = ?", session.SessionID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != model.VPNStateStarting || stored.RuntimeInstanceID != restarting.RuntimeInstanceID {
+		t.Fatalf("stale stop result persisted mutation, state=%q runtime=%q", stored.State, stored.RuntimeInstanceID)
 	}
 }
 

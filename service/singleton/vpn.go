@@ -2533,49 +2533,52 @@ func vpnPolicyAuditDetail(policy *model.AgentVPNPolicy) map[string]string {
 	if policy == nil {
 		return nil
 	}
+	policy = cloneVPNPolicy(policy)
+	normalizeVPNAutoRestartPolicy(policy)
 	return map[string]string{
-		"policy_id":                       fmt.Sprint(policy.ID),
-		"policy_name":                     policy.Name,
-		"mode":                            policy.Mode,
-		"rule_mode":                       policy.RuleMode,
-		"relay_mode":                      policy.RelayMode,
-		"direct_transport":                normalizeVPNDirectTransport(policy.DirectTransport),
-		"direct_host":                     policy.DirectHost,
-		"direct_port":                     fmt.Sprint(policy.DirectPort),
-		"direct_tls_server_name":          policy.DirectTLSServerName,
-		"direct_ws_path":                  normalizeVPNDirectWSPath(policy.DirectWSPath),
-		"direct_tls_verify":               fmt.Sprint(policy.DirectTLSVerify),
-		"direct_cert_sha256":              policy.DirectCertSHA256,
-		"exit_nat_enabled":                fmt.Sprint(policy.ExitNATEnabled),
-		"exit_nat_host":                   policy.ExitNATHost,
-		"exit_nat_port":                   fmt.Sprint(policy.ExitNATPort),
-		"domains":                         strings.Join(policy.Domains, ","),
-		"cidrs":                           strings.Join(policy.CIDRs, ","),
-		"direct_cidrs":                    strings.Join(policy.DirectCIDRs, ","),
-		"listen_http":                     policy.ListenHTTP,
-		"listen_socks":                    policy.ListenSOCKS,
-		"tun_name":                        policy.TunName,
-		"dns_server":                      policy.DNSServer,
-		"expires_seconds":                 fmt.Sprint(policy.ExpiresSeconds),
-		"max_upload_bytes":                fmt.Sprint(policy.MaxUploadBytes),
-		"max_download_bytes":              fmt.Sprint(policy.MaxDownloadBytes),
-		"max_connections":                 fmt.Sprint(policy.MaxConnections),
-		"idle_timeout_seconds":            fmt.Sprint(policy.IdleTimeoutSeconds),
-		"notification_group_id":           fmt.Sprint(policy.NotificationGroupID),
-		"auto_restart":                    fmt.Sprint(policy.AutoRestart),
-		"auto_restart_max_attempts":       fmt.Sprint(policy.AutoRestartMaxAttempts),
-		"auto_restart_backoff_seconds":    formatVPNUint32List(policy.AutoRestartBackoffSeconds),
-		"auto_restart_window_seconds":     fmt.Sprint(policy.AutoRestartWindowSeconds),
-		"auto_restart_on_relay_failure":   fmt.Sprint(policy.AutoRestartOnRelayFailure),
-		"auto_restart_on_exit_failure":    fmt.Sprint(policy.AutoRestartOnExitFailure),
-		"auto_restart_on_agent_reconnect": fmt.Sprint(policy.AutoRestartOnAgentReconnect),
-		"set_system_proxy":                fmt.Sprint(policy.SetSystemProxy),
-		"tun_health_url":                  policy.TunHealthURL,
-		"tun_health_timeout_seconds":      fmt.Sprint(policy.TunHealthTimeoutSeconds),
-		"egress_probe_url":                policy.EgressProbeURL,
-		"core_version":                    policy.CoreVersion,
-		"core_download_url":               policy.CoreDownloadURL,
-		"core_sha256":                     policy.CoreSHA256,
+		"policy_id":                        fmt.Sprint(policy.ID),
+		"policy_name":                      policy.Name,
+		"mode":                             policy.Mode,
+		"rule_mode":                        policy.RuleMode,
+		"relay_mode":                       policy.RelayMode,
+		"direct_transport":                 normalizeVPNDirectTransport(policy.DirectTransport),
+		"direct_host":                      policy.DirectHost,
+		"direct_port":                      fmt.Sprint(policy.DirectPort),
+		"direct_tls_server_name":           policy.DirectTLSServerName,
+		"direct_ws_path":                   normalizeVPNDirectWSPath(policy.DirectWSPath),
+		"direct_tls_verify":                fmt.Sprint(policy.DirectTLSVerify),
+		"direct_cert_sha256":               policy.DirectCertSHA256,
+		"exit_nat_enabled":                 fmt.Sprint(policy.ExitNATEnabled),
+		"exit_nat_host":                    policy.ExitNATHost,
+		"exit_nat_port":                    fmt.Sprint(policy.ExitNATPort),
+		"domains":                          strings.Join(policy.Domains, ","),
+		"cidrs":                            strings.Join(policy.CIDRs, ","),
+		"direct_cidrs":                     strings.Join(policy.DirectCIDRs, ","),
+		"listen_http":                      policy.ListenHTTP,
+		"listen_socks":                     policy.ListenSOCKS,
+		"tun_name":                         policy.TunName,
+		"dns_server":                       policy.DNSServer,
+		"expires_seconds":                  fmt.Sprint(policy.ExpiresSeconds),
+		"max_upload_bytes":                 fmt.Sprint(policy.MaxUploadBytes),
+		"max_download_bytes":               fmt.Sprint(policy.MaxDownloadBytes),
+		"max_connections":                  fmt.Sprint(policy.MaxConnections),
+		"idle_timeout_seconds":             fmt.Sprint(policy.IdleTimeoutSeconds),
+		"notification_group_id":            fmt.Sprint(policy.NotificationGroupID),
+		"auto_restart":                     fmt.Sprint(policy.AutoRestart),
+		"auto_restart_max_attempts":        fmt.Sprint(policy.AutoRestartMaxAttempts),
+		"auto_restart_backoff_seconds":     formatVPNUint32List(policy.AutoRestartBackoffSeconds),
+		"auto_restart_window_seconds":      fmt.Sprint(policy.AutoRestartWindowSeconds),
+		"auto_restart_settings_configured": fmt.Sprint(policy.AutoRestartSettingsConfigured),
+		"auto_restart_on_relay_failure":    fmt.Sprint(policy.AutoRestartOnRelayFailure),
+		"auto_restart_on_exit_failure":     fmt.Sprint(policy.AutoRestartOnExitFailure),
+		"auto_restart_on_agent_reconnect":  fmt.Sprint(policy.AutoRestartOnAgentReconnect),
+		"set_system_proxy":                 fmt.Sprint(policy.SetSystemProxy),
+		"tun_health_url":                   policy.TunHealthURL,
+		"tun_health_timeout_seconds":       fmt.Sprint(policy.TunHealthTimeoutSeconds),
+		"egress_probe_url":                 policy.EgressProbeURL,
+		"core_version":                     policy.CoreVersion,
+		"core_download_url":                policy.CoreDownloadURL,
+		"core_sha256":                      policy.CoreSHA256,
 	}
 }
 
@@ -3193,7 +3196,7 @@ func isStaleVPNRuntimeResult(session *model.AgentVPNSession, result model.VPNCon
 		return false
 	}
 	switch result.Action {
-	case model.VPNActionPrepare, model.VPNActionRulesPrepare, model.VPNActionRulesCleanup, model.VPNActionCleanup:
+	case model.VPNActionPrepare, model.VPNActionRulesPrepare, model.VPNActionRulesCleanup:
 		return false
 	}
 	if runtimeID := strings.TrimSpace(result.RuntimeInstanceID); runtimeID != "" && strings.TrimSpace(session.RuntimeInstanceID) != "" {
@@ -3420,14 +3423,25 @@ func applyVPNPolicyAuditDetail(policy *model.AgentVPNPolicy, detail map[string]s
 			policy.AutoRestartWindowSeconds = uint32(parsed)
 		}
 	}
+	autoRestartSettingsConfigured := false
+	if value := strings.TrimSpace(detail["auto_restart_settings_configured"]); value != "" {
+		policy.AutoRestartSettingsConfigured = strings.EqualFold(value, "true")
+		autoRestartSettingsConfigured = true
+	}
 	if value := strings.TrimSpace(detail["auto_restart_on_relay_failure"]); value != "" {
 		policy.AutoRestartOnRelayFailure = strings.EqualFold(value, "true")
+		autoRestartSettingsConfigured = true
 	}
 	if value := strings.TrimSpace(detail["auto_restart_on_exit_failure"]); value != "" {
 		policy.AutoRestartOnExitFailure = strings.EqualFold(value, "true")
+		autoRestartSettingsConfigured = true
 	}
 	if value := strings.TrimSpace(detail["auto_restart_on_agent_reconnect"]); value != "" {
 		policy.AutoRestartOnAgentReconnect = strings.EqualFold(value, "true")
+		autoRestartSettingsConfigured = true
+	}
+	if autoRestartSettingsConfigured {
+		policy.AutoRestartSettingsConfigured = true
 	}
 	if value := strings.TrimSpace(detail["set_system_proxy"]); value != "" {
 		policy.SetSystemProxy = strings.EqualFold(value, "true")
@@ -3921,6 +3935,10 @@ func validateVPNCoreSpec(downloadURL string, sha256Value string) error {
 	return nil
 }
 
+func NormalizeVPNPolicyDefaults(policy *model.AgentVPNPolicy) {
+	normalizeVPNAutoRestartPolicy(policy)
+}
+
 func normalizeVPNStringList(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := map[string]struct{}{}
@@ -3991,10 +4009,10 @@ func normalizeVPNAutoRestartPolicy(policy *model.AgentVPNPolicy) {
 		policy.AutoRestartMaxAttempts = maxVPNAutoRestartAttempts
 	}
 	policy.AutoRestartBackoffSeconds = normalizeVPNAutoRestartBackoff(policy.AutoRestartBackoffSeconds)
-	if policy.AutoRestartWindowSeconds == 0 {
+	if policy.AutoRestartWindowSeconds == 0 && !policy.AutoRestartSettingsConfigured {
 		policy.AutoRestartWindowSeconds = defaultVPNAutoRestartWindowSeconds
 	}
-	if policy.AutoRestart && !policy.AutoRestartOnRelayFailure && !policy.AutoRestartOnExitFailure && !policy.AutoRestartOnAgentReconnect {
+	if policy.AutoRestart && !policy.AutoRestartSettingsConfigured && !policy.AutoRestartOnRelayFailure && !policy.AutoRestartOnExitFailure && !policy.AutoRestartOnAgentReconnect {
 		policy.AutoRestartOnRelayFailure = true
 		policy.AutoRestartOnExitFailure = true
 		policy.AutoRestartOnAgentReconnect = true
@@ -4006,49 +4024,50 @@ func vpnPolicyFromForm(userID uint64, form model.AgentVPNPolicyForm) *model.Agen
 		Common: model.Common{
 			UserID: userID,
 		},
-		Name:                        strings.TrimSpace(form.Name),
-		EntryServerID:               form.EntryServerID,
-		ExitServerID:                form.ExitServerID,
-		Mode:                        normalizeVPNMode(form.Mode),
-		RuleMode:                    normalizeVPNRuleMode(form.RuleMode),
-		RelayMode:                   normalizeVPNRelayPreference(form.RelayMode),
-		DirectTransport:             normalizeVPNDirectTransport(form.DirectTransport),
-		DirectHost:                  strings.TrimSpace(form.DirectHost),
-		DirectPort:                  form.DirectPort,
-		DirectTLSServerName:         strings.TrimSpace(form.DirectTLSServerName),
-		DirectWSPath:                normalizeVPNDirectWSPath(form.DirectWSPath),
-		DirectTLSVerify:             form.DirectTLSVerify,
-		DirectCertSHA256:            normalizeVPNDirectSHA256(form.DirectCertSHA256),
-		ExitNATEnabled:              form.ExitNATEnabled,
-		ExitNATHost:                 strings.TrimSpace(form.ExitNATHost),
-		ExitNATPort:                 form.ExitNATPort,
-		Domains:                     normalizeVPNStringList(form.Domains),
-		CIDRs:                       normalizeVPNStringList(form.CIDRs),
-		DirectCIDRs:                 normalizeVPNStringList(form.DirectCIDRs),
-		ListenHTTP:                  strings.TrimSpace(form.ListenHTTP),
-		ListenSOCKS:                 strings.TrimSpace(form.ListenSOCKS),
-		TunName:                     strings.TrimSpace(form.TunName),
-		DNSServer:                   strings.TrimSpace(form.DNSServer),
-		ExpiresSeconds:              normalizeVPNExpires(form.ExpiresSeconds),
-		MaxUploadBytes:              form.MaxUploadBytes,
-		MaxDownloadBytes:            form.MaxDownloadBytes,
-		MaxConnections:              form.MaxConnections,
-		IdleTimeoutSeconds:          form.IdleTimeoutSeconds,
-		NotificationGroupID:         form.NotificationGroupID,
-		AutoRestart:                 form.AutoRestart,
-		AutoRestartMaxAttempts:      form.AutoRestartMaxAttempts,
-		AutoRestartBackoffSeconds:   normalizeVPNAutoRestartBackoff(form.AutoRestartBackoffSeconds),
-		AutoRestartWindowSeconds:    form.AutoRestartWindowSeconds,
-		AutoRestartOnRelayFailure:   form.AutoRestartOnRelayFailure,
-		AutoRestartOnExitFailure:    form.AutoRestartOnExitFailure,
-		AutoRestartOnAgentReconnect: form.AutoRestartOnAgentReconnect,
-		SetSystemProxy:              form.SetSystemProxy,
-		TunHealthURL:                strings.TrimSpace(form.TunHealthURL),
-		TunHealthTimeoutSeconds:     normalizeVPNTunHealthTimeout(form.TunHealthTimeoutSeconds),
-		EgressProbeURL:              strings.TrimSpace(form.EgressProbeURL),
-		CoreVersion:                 strings.TrimSpace(form.CoreVersion),
-		CoreDownloadURL:             strings.TrimSpace(form.CoreDownloadURL),
-		CoreSHA256:                  strings.TrimSpace(form.CoreSHA256),
+		Name:                          strings.TrimSpace(form.Name),
+		EntryServerID:                 form.EntryServerID,
+		ExitServerID:                  form.ExitServerID,
+		Mode:                          normalizeVPNMode(form.Mode),
+		RuleMode:                      normalizeVPNRuleMode(form.RuleMode),
+		RelayMode:                     normalizeVPNRelayPreference(form.RelayMode),
+		DirectTransport:               normalizeVPNDirectTransport(form.DirectTransport),
+		DirectHost:                    strings.TrimSpace(form.DirectHost),
+		DirectPort:                    form.DirectPort,
+		DirectTLSServerName:           strings.TrimSpace(form.DirectTLSServerName),
+		DirectWSPath:                  normalizeVPNDirectWSPath(form.DirectWSPath),
+		DirectTLSVerify:               form.DirectTLSVerify,
+		DirectCertSHA256:              normalizeVPNDirectSHA256(form.DirectCertSHA256),
+		ExitNATEnabled:                form.ExitNATEnabled,
+		ExitNATHost:                   strings.TrimSpace(form.ExitNATHost),
+		ExitNATPort:                   form.ExitNATPort,
+		Domains:                       normalizeVPNStringList(form.Domains),
+		CIDRs:                         normalizeVPNStringList(form.CIDRs),
+		DirectCIDRs:                   normalizeVPNStringList(form.DirectCIDRs),
+		ListenHTTP:                    strings.TrimSpace(form.ListenHTTP),
+		ListenSOCKS:                   strings.TrimSpace(form.ListenSOCKS),
+		TunName:                       strings.TrimSpace(form.TunName),
+		DNSServer:                     strings.TrimSpace(form.DNSServer),
+		ExpiresSeconds:                normalizeVPNExpires(form.ExpiresSeconds),
+		MaxUploadBytes:                form.MaxUploadBytes,
+		MaxDownloadBytes:              form.MaxDownloadBytes,
+		MaxConnections:                form.MaxConnections,
+		IdleTimeoutSeconds:            form.IdleTimeoutSeconds,
+		NotificationGroupID:           form.NotificationGroupID,
+		AutoRestart:                   form.AutoRestart,
+		AutoRestartMaxAttempts:        form.AutoRestartMaxAttempts,
+		AutoRestartBackoffSeconds:     normalizeVPNAutoRestartBackoff(form.AutoRestartBackoffSeconds),
+		AutoRestartWindowSeconds:      form.AutoRestartWindowSeconds,
+		AutoRestartOnRelayFailure:     form.AutoRestartOnRelayFailure,
+		AutoRestartOnExitFailure:      form.AutoRestartOnExitFailure,
+		AutoRestartOnAgentReconnect:   form.AutoRestartOnAgentReconnect,
+		AutoRestartSettingsConfigured: form.AutoRestartSettingsConfigured,
+		SetSystemProxy:                form.SetSystemProxy,
+		TunHealthURL:                  strings.TrimSpace(form.TunHealthURL),
+		TunHealthTimeoutSeconds:       normalizeVPNTunHealthTimeout(form.TunHealthTimeoutSeconds),
+		EgressProbeURL:                strings.TrimSpace(form.EgressProbeURL),
+		CoreVersion:                   strings.TrimSpace(form.CoreVersion),
+		CoreDownloadURL:               strings.TrimSpace(form.CoreDownloadURL),
+		CoreSHA256:                    strings.TrimSpace(form.CoreSHA256),
 	}
 	if policy.Name == "" {
 		policy.Name = fmt.Sprintf("Proxy Tunnel %d -> %d", policy.EntryServerID, policy.ExitServerID)

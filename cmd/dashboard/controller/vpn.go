@@ -27,7 +27,11 @@ func listVPNPolicy(c *gin.Context) ([]*model.AgentVPNPolicy, error) {
 	if err := singleton.DB.Order("id ASC").Find(&policies).Error; err != nil {
 		return nil, newGormError("%v", err)
 	}
-	return filterVPNPolicies(c, policies), nil
+	policies = filterVPNPolicies(c, policies)
+	for _, policy := range policies {
+		singleton.NormalizeVPNPolicyDefaults(policy)
+	}
+	return policies, nil
 }
 
 func createVPNPolicy(c *gin.Context) (uint64, error) {

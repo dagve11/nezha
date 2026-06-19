@@ -187,49 +187,50 @@ type AgentVPNDebugResult struct {
 }
 
 type AgentVPNPolicyForm struct {
-	Name                        string   `json:"name"`
-	EntryServerID               uint64   `json:"entry_server_id"`
-	ExitServerID                uint64   `json:"exit_server_id"`
-	Mode                        string   `json:"mode"`
-	RuleMode                    string   `json:"rule_mode"`
-	RelayMode                   string   `json:"relay_mode"`
-	DirectTransport             string   `json:"direct_transport"`
-	DirectHost                  string   `json:"direct_host"`
-	DirectPort                  uint32   `json:"direct_port"`
-	DirectTLSServerName         string   `json:"direct_tls_server_name"`
-	DirectWSPath                string   `json:"direct_ws_path"`
-	DirectTLSVerify             bool     `json:"direct_tls_verify"`
-	DirectCertSHA256            string   `json:"direct_cert_sha256"`
-	ExitNATEnabled              bool     `json:"exit_nat_enabled"`
-	ExitNATHost                 string   `json:"exit_nat_host"`
-	ExitNATPort                 uint32   `json:"exit_nat_port"`
-	Domains                     []string `json:"domains"`
-	CIDRs                       []string `json:"cidrs"`
-	DirectCIDRs                 []string `json:"direct_cidrs"`
-	ListenHTTP                  string   `json:"listen_http"`
-	ListenSOCKS                 string   `json:"listen_socks"`
-	TunName                     string   `json:"tun_name"`
-	DNSServer                   string   `json:"dns_server"`
-	ExpiresSeconds              uint32   `json:"expires_seconds"`
-	MaxUploadBytes              uint64   `json:"max_upload_bytes"`
-	MaxDownloadBytes            uint64   `json:"max_download_bytes"`
-	MaxConnections              uint32   `json:"max_connections"`
-	IdleTimeoutSeconds          uint32   `json:"idle_timeout_seconds"`
-	NotificationGroupID         uint64   `json:"notification_group_id"`
-	AutoRestart                 bool     `json:"auto_restart"`
-	AutoRestartMaxAttempts      uint32   `json:"auto_restart_max_attempts"`
-	AutoRestartBackoffSeconds   []uint32 `json:"auto_restart_backoff_seconds"`
-	AutoRestartWindowSeconds    uint32   `json:"auto_restart_window_seconds"`
-	AutoRestartOnRelayFailure   bool     `json:"auto_restart_on_relay_failure"`
-	AutoRestartOnExitFailure    bool     `json:"auto_restart_on_exit_failure"`
-	AutoRestartOnAgentReconnect bool     `json:"auto_restart_on_agent_reconnect"`
-	SetSystemProxy              bool     `json:"set_system_proxy"`
-	TunHealthURL                string   `json:"tun_health_url"`
-	TunHealthTimeoutSeconds     uint32   `json:"tun_health_timeout_seconds"`
-	EgressProbeURL              string   `json:"egress_probe_url"`
-	CoreVersion                 string   `json:"core_version"`
-	CoreDownloadURL             string   `json:"core_download_url"`
-	CoreSHA256                  string   `json:"core_sha256"`
+	Name                          string   `json:"name"`
+	EntryServerID                 uint64   `json:"entry_server_id"`
+	ExitServerID                  uint64   `json:"exit_server_id"`
+	Mode                          string   `json:"mode"`
+	RuleMode                      string   `json:"rule_mode"`
+	RelayMode                     string   `json:"relay_mode"`
+	DirectTransport               string   `json:"direct_transport"`
+	DirectHost                    string   `json:"direct_host"`
+	DirectPort                    uint32   `json:"direct_port"`
+	DirectTLSServerName           string   `json:"direct_tls_server_name"`
+	DirectWSPath                  string   `json:"direct_ws_path"`
+	DirectTLSVerify               bool     `json:"direct_tls_verify"`
+	DirectCertSHA256              string   `json:"direct_cert_sha256"`
+	ExitNATEnabled                bool     `json:"exit_nat_enabled"`
+	ExitNATHost                   string   `json:"exit_nat_host"`
+	ExitNATPort                   uint32   `json:"exit_nat_port"`
+	Domains                       []string `json:"domains"`
+	CIDRs                         []string `json:"cidrs"`
+	DirectCIDRs                   []string `json:"direct_cidrs"`
+	ListenHTTP                    string   `json:"listen_http"`
+	ListenSOCKS                   string   `json:"listen_socks"`
+	TunName                       string   `json:"tun_name"`
+	DNSServer                     string   `json:"dns_server"`
+	ExpiresSeconds                uint32   `json:"expires_seconds"`
+	MaxUploadBytes                uint64   `json:"max_upload_bytes"`
+	MaxDownloadBytes              uint64   `json:"max_download_bytes"`
+	MaxConnections                uint32   `json:"max_connections"`
+	IdleTimeoutSeconds            uint32   `json:"idle_timeout_seconds"`
+	NotificationGroupID           uint64   `json:"notification_group_id"`
+	AutoRestart                   bool     `json:"auto_restart"`
+	AutoRestartMaxAttempts        uint32   `json:"auto_restart_max_attempts"`
+	AutoRestartBackoffSeconds     []uint32 `json:"auto_restart_backoff_seconds"`
+	AutoRestartWindowSeconds      uint32   `json:"auto_restart_window_seconds"`
+	AutoRestartOnRelayFailure     bool     `json:"auto_restart_on_relay_failure"`
+	AutoRestartOnExitFailure      bool     `json:"auto_restart_on_exit_failure"`
+	AutoRestartOnAgentReconnect   bool     `json:"auto_restart_on_agent_reconnect"`
+	AutoRestartSettingsConfigured bool     `json:"auto_restart_settings_configured"`
+	SetSystemProxy                bool     `json:"set_system_proxy"`
+	TunHealthURL                  string   `json:"tun_health_url"`
+	TunHealthTimeoutSeconds       uint32   `json:"tun_health_timeout_seconds"`
+	EgressProbeURL                string   `json:"egress_probe_url"`
+	CoreVersion                   string   `json:"core_version"`
+	CoreDownloadURL               string   `json:"core_download_url"`
+	CoreSHA256                    string   `json:"core_sha256"`
 }
 
 type AgentVPNSessionStartForm struct {
@@ -270,53 +271,54 @@ type AgentVPNPolicyNodeStatus struct {
 
 type AgentVPNPolicy struct {
 	Common
-	Name                         string   `json:"name"`
-	EntryServerID                uint64   `json:"entry_server_id" gorm:"index"`
-	ExitServerID                 uint64   `json:"exit_server_id" gorm:"index"`
-	Mode                         string   `json:"mode" gorm:"index"`
-	RuleMode                     string   `json:"rule_mode"`
-	RelayMode                    string   `json:"relay_mode"`
-	DirectTransport              string   `json:"direct_transport"`
-	DirectHost                   string   `json:"direct_host"`
-	DirectPort                   uint32   `json:"direct_port"`
-	DirectTLSServerName          string   `json:"direct_tls_server_name"`
-	DirectWSPath                 string   `json:"direct_ws_path"`
-	DirectTLSVerify              bool     `json:"direct_tls_verify"`
-	DirectCertSHA256             string   `json:"direct_cert_sha256"`
-	ExitNATEnabled               bool     `json:"exit_nat_enabled"`
-	ExitNATHost                  string   `json:"exit_nat_host"`
-	ExitNATPort                  uint32   `json:"exit_nat_port"`
-	Domains                      []string `json:"domains" gorm:"-"`
-	CIDRs                        []string `json:"cidrs" gorm:"-"`
-	DirectCIDRs                  []string `json:"direct_cidrs" gorm:"-"`
-	DomainsRaw                   string   `json:"-" gorm:"type:text"`
-	CIDRsRaw                     string   `json:"-" gorm:"type:text"`
-	DirectCIDRsRaw               string   `json:"-" gorm:"type:text"`
-	ListenHTTP                   string   `json:"listen_http"`
-	ListenSOCKS                  string   `json:"listen_socks"`
-	TunName                      string   `json:"tun_name"`
-	DNSServer                    string   `json:"dns_server"`
-	ExpiresSeconds               uint32   `json:"expires_seconds"`
-	MaxUploadBytes               uint64   `json:"max_upload_bytes"`
-	MaxDownloadBytes             uint64   `json:"max_download_bytes"`
-	MaxConnections               uint32   `json:"max_connections"`
-	IdleTimeoutSeconds           uint32   `json:"idle_timeout_seconds"`
-	NotificationGroupID          uint64   `json:"notification_group_id"`
-	AutoRestart                  bool     `json:"auto_restart"`
-	AutoRestartMaxAttempts       uint32   `json:"auto_restart_max_attempts"`
-	AutoRestartBackoffSeconds    []uint32 `json:"auto_restart_backoff_seconds" gorm:"-"`
-	AutoRestartBackoffSecondsRaw string   `json:"-" gorm:"type:text"`
-	AutoRestartWindowSeconds     uint32   `json:"auto_restart_window_seconds"`
-	AutoRestartOnRelayFailure    bool     `json:"auto_restart_on_relay_failure"`
-	AutoRestartOnExitFailure     bool     `json:"auto_restart_on_exit_failure"`
-	AutoRestartOnAgentReconnect  bool     `json:"auto_restart_on_agent_reconnect"`
-	SetSystemProxy               bool     `json:"set_system_proxy"`
-	TunHealthURL                 string   `json:"tun_health_url"`
-	TunHealthTimeoutSeconds      uint32   `json:"tun_health_timeout_seconds"`
-	EgressProbeURL               string   `json:"egress_probe_url"`
-	CoreVersion                  string   `json:"core_version"`
-	CoreDownloadURL              string   `json:"core_download_url"`
-	CoreSHA256                   string   `json:"core_sha256"`
+	Name                          string   `json:"name"`
+	EntryServerID                 uint64   `json:"entry_server_id" gorm:"index"`
+	ExitServerID                  uint64   `json:"exit_server_id" gorm:"index"`
+	Mode                          string   `json:"mode" gorm:"index"`
+	RuleMode                      string   `json:"rule_mode"`
+	RelayMode                     string   `json:"relay_mode"`
+	DirectTransport               string   `json:"direct_transport"`
+	DirectHost                    string   `json:"direct_host"`
+	DirectPort                    uint32   `json:"direct_port"`
+	DirectTLSServerName           string   `json:"direct_tls_server_name"`
+	DirectWSPath                  string   `json:"direct_ws_path"`
+	DirectTLSVerify               bool     `json:"direct_tls_verify"`
+	DirectCertSHA256              string   `json:"direct_cert_sha256"`
+	ExitNATEnabled                bool     `json:"exit_nat_enabled"`
+	ExitNATHost                   string   `json:"exit_nat_host"`
+	ExitNATPort                   uint32   `json:"exit_nat_port"`
+	Domains                       []string `json:"domains" gorm:"-"`
+	CIDRs                         []string `json:"cidrs" gorm:"-"`
+	DirectCIDRs                   []string `json:"direct_cidrs" gorm:"-"`
+	DomainsRaw                    string   `json:"-" gorm:"type:text"`
+	CIDRsRaw                      string   `json:"-" gorm:"type:text"`
+	DirectCIDRsRaw                string   `json:"-" gorm:"type:text"`
+	ListenHTTP                    string   `json:"listen_http"`
+	ListenSOCKS                   string   `json:"listen_socks"`
+	TunName                       string   `json:"tun_name"`
+	DNSServer                     string   `json:"dns_server"`
+	ExpiresSeconds                uint32   `json:"expires_seconds"`
+	MaxUploadBytes                uint64   `json:"max_upload_bytes"`
+	MaxDownloadBytes              uint64   `json:"max_download_bytes"`
+	MaxConnections                uint32   `json:"max_connections"`
+	IdleTimeoutSeconds            uint32   `json:"idle_timeout_seconds"`
+	NotificationGroupID           uint64   `json:"notification_group_id"`
+	AutoRestart                   bool     `json:"auto_restart"`
+	AutoRestartMaxAttempts        uint32   `json:"auto_restart_max_attempts"`
+	AutoRestartBackoffSeconds     []uint32 `json:"auto_restart_backoff_seconds" gorm:"-"`
+	AutoRestartBackoffSecondsRaw  string   `json:"-" gorm:"type:text"`
+	AutoRestartWindowSeconds      uint32   `json:"auto_restart_window_seconds"`
+	AutoRestartOnRelayFailure     bool     `json:"auto_restart_on_relay_failure"`
+	AutoRestartOnExitFailure      bool     `json:"auto_restart_on_exit_failure"`
+	AutoRestartOnAgentReconnect   bool     `json:"auto_restart_on_agent_reconnect"`
+	AutoRestartSettingsConfigured bool     `json:"-" gorm:"default:false"`
+	SetSystemProxy                bool     `json:"set_system_proxy"`
+	TunHealthURL                  string   `json:"tun_health_url"`
+	TunHealthTimeoutSeconds       uint32   `json:"tun_health_timeout_seconds"`
+	EgressProbeURL                string   `json:"egress_probe_url"`
+	CoreVersion                   string   `json:"core_version"`
+	CoreDownloadURL               string   `json:"core_download_url"`
+	CoreSHA256                    string   `json:"core_sha256"`
 }
 
 func (p *AgentVPNPolicy) BeforeSave(tx *gorm.DB) error {
