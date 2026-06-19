@@ -1747,6 +1747,7 @@ func (v *VPNClass) fallbackDirectStartFailure(policy *model.AgentVPNPolicy, sess
 		"direct_fallback":  "true",
 		"reason":           reason,
 	})
+	cleanupErrors := v.stopDirectRelayAttemptBeforeFallback(session, policy, token, result.Action)
 	session.RelayMode = model.VPNRelayModeDashboard
 	session.State = model.VPNStateStarting
 	session.EntryState = model.VPNStatePending
@@ -1765,6 +1766,9 @@ func (v *VPNClass) fallbackDirectStartFailure(policy *model.AgentVPNPolicy, sess
 		session.State = model.VPNStateFailed
 		session.ExitState = model.VPNStateFailed
 		session.LastError = err.Error()
+		if len(cleanupErrors) > 0 {
+			session.LastError += "; direct cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+		}
 		_ = DB.Save(session).Error
 		v.finalizeVPNSessionRuntime(session.SessionID)
 		v.notifyLifecycleFailure(policy, session, result.Action, "")
@@ -1774,12 +1778,41 @@ func (v *VPNClass) fallbackDirectStartFailure(policy *model.AgentVPNPolicy, sess
 		session.State = model.VPNStateFailed
 		session.ExitState = model.VPNStateFailed
 		session.LastError = err.Error()
+		if len(cleanupErrors) > 0 {
+			session.LastError += "; direct cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+		}
 		_ = DB.Save(session).Error
 		v.finalizeVPNSessionRuntime(session.SessionID)
 		v.notifyLifecycleFailure(policy, session, result.Action, "")
 		return session, true, err
 	}
 	return session, true, nil
+}
+
+func (v *VPNClass) stopDirectRelayAttemptBeforeFallback(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, token string, action string) []string {
+	cleanupErrors := make([]string, 0, 1)
+	if session == nil || policy == nil || session.ExitServerID == 0 {
+		return cleanupErrors
+	}
+	exit, ok := ServerShared.Get(session.ExitServerID)
+	if !ok || exit == nil || exit.GetTaskStream() == nil {
+		cleanupErrors = append(cleanupErrors, fmt.Sprintf("exit server %d is offline", session.ExitServerID))
+		return cleanupErrors
+	}
+	if err := v.sendControl(exit, session, policy, model.VPNRoleExit, model.VPNActionStop, token); err != nil {
+		cleanupErrors = append(cleanupErrors, "exit: "+err.Error())
+		log.Printf("NEZHA>> VPN direct fallback cleanup dispatch failed: session=%s role=exit err=%v", session.SessionID, err)
+		return cleanupErrors
+	}
+	v.appendControlLog(session.SessionID, "sent stop request to exit agent before dashboard fallback")
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, vpnLifecycleFailureAuditAction(action), session.SessionID, session.EntryServerID, session.ExitServerID, true, "direct relay exit cleanup dispatched before fallback", map[string]string{
+		"stage":              vpnLifecycleFailureStage(action, "direct_exit_cleanup_before_fallback"),
+		"direct_cleanup":     "true",
+		"direct_fallback":    "true",
+		"cleanup_role":       model.VPNRoleExit,
+		"cleanup_dispatched": "true",
+	})
+	return cleanupErrors
 }
 
 func (v *VPNClass) recordRelayTraffic(sessionID string, uploadBytes uint64, downloadBytes uint64, activeConnections uint32) {

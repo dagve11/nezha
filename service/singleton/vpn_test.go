@@ -983,12 +983,16 @@ func TestVPNStartSessionFallsBackToDashboardRelayWhenDirectEntryStartFails(t *te
 	if len(*h.relayCreates) != 1 {
 		t.Fatalf("fallback must create one dashboard relay, got %#v", *h.relayCreates)
 	}
+	_, directExitStopReq := readVPNTask(t, h.exitStream)
+	if directExitStopReq.Action != model.VPNActionStop || directExitStopReq.Role != model.VPNRoleExit {
+		t.Fatalf("fallback must stop the previous direct exit attempt before restart, got %+v", directExitStopReq)
+	}
 	_, fallbackExitReq := readVPNTask(t, h.exitStream)
 	if fallbackExitReq.Action != model.VPNActionStart || fallbackExitReq.Role != model.VPNRoleExit || fallbackExitReq.RelayMode != model.VPNRelayModeDashboard {
 		t.Fatalf("fallback must redispatch dashboard exit start, got %+v", fallbackExitReq)
 	}
-	if fallbackExitReq.Token != directEntryReq.Token {
-		t.Fatal("fallback dashboard start must keep the existing per-session token")
+	if fallbackExitReq.Token != directEntryReq.Token || directExitStopReq.Token != directEntryReq.Token {
+		t.Fatal("fallback cleanup and dashboard start must keep the existing per-session token")
 	}
 
 	var audit model.AgentVPNAuditLog
@@ -997,6 +1001,66 @@ func TestVPNStartSessionFallsBackToDashboardRelayWhenDirectEntryStartFails(t *te
 	}
 	if audit.Detail["direct_attempted"] != "true" || audit.Detail["direct_fallback"] != "true" {
 		t.Fatalf("fallback audit detail mismatch: %#v", audit.Detail)
+	}
+}
+
+func TestVPNDirectFallbackStopsExitAttemptBeforeDashboardRestart(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(2).Host.VPNDirectEnabled = true
+	h.mustServer(2).Host.VPNDirectListenPort = 8090
+	h.mustServer(2).Host.VPNDirectCertSHA256 = strings.Repeat("b", 64)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+
+	session, err := h.vpn.StartSession(actor, policy.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	readVPNTask(t, h.exitStream)
+	readVPNTask(t, h.entryStream)
+	exitStartReq := dispatchExitStartAfterPreparedForTest(t, h, session, policy)
+	if exitStartReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("exit start relay mode = %q, want direct", exitStartReq.RelayMode)
+	}
+	session, err = h.vpn.HandleControlResult(policy.ExitServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleExit,
+		State:     model.VPNStateRunning,
+	})
+	if err != nil {
+		t.Fatalf("handle exit running: %v", err)
+	}
+	_, directEntryReq := readVPNTask(t, h.entryStream)
+	if directEntryReq.RelayMode != model.VPNRelayModeDirect {
+		t.Fatalf("entry start relay mode = %q, want direct", directEntryReq.RelayMode)
+	}
+
+	session, err = h.vpn.HandleControlResult(policy.EntryServerID, model.VPNControlResult{
+		SessionID: session.SessionID,
+		Action:    model.VPNActionStart,
+		Role:      model.VPNRoleEntry,
+		State:     model.VPNStateFailed,
+		LastError: "websocket bad handshake",
+	})
+	if err != nil {
+		t.Fatalf("direct entry failure should fall back without returning error: %v", err)
+	}
+	_, exitStopReq := readVPNTask(t, h.exitStream)
+	if exitStopReq.Action != model.VPNActionStop || exitStopReq.Role != model.VPNRoleExit {
+		t.Fatalf("fallback must stop the previous direct exit attempt before restart, got %+v", exitStopReq)
+	}
+	_, fallbackExitReq := readVPNTask(t, h.exitStream)
+	if fallbackExitReq.Action != model.VPNActionStart || fallbackExitReq.Role != model.VPNRoleExit || fallbackExitReq.RelayMode != model.VPNRelayModeDashboard {
+		t.Fatalf("fallback must redispatch dashboard exit start after direct cleanup, got %+v", fallbackExitReq)
+	}
+	if fallbackExitReq.Token != directEntryReq.Token || exitStopReq.Token != directEntryReq.Token {
+		t.Fatal("fallback cleanup and restart must keep the existing per-session token")
+	}
+
+	logs := strings.Join(h.vpn.SessionLogs(session.SessionID), "\n")
+	if !strings.Contains(logs, "sent stop request to exit agent before dashboard fallback") {
+		t.Fatalf("fallback logs must include exit direct cleanup dispatch, got:\n%s", logs)
 	}
 }
 
