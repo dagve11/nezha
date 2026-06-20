@@ -15,7 +15,10 @@ import (
 	pb "github.com/nezhahq/nezha/proto"
 )
 
-const bestIPFissionRemoteTimeout = 30 * time.Minute
+const (
+	bestIPFissionRemoteAckTimeout = 20 * time.Second
+	bestIPFissionRemoteTimeout    = 30 * time.Minute
+)
 
 var (
 	bestIPFissionTaskSeq atomic.Uint64
@@ -76,6 +79,9 @@ func runRemoteBestIPFission(ctx context.Context, userID, probeServerID uint64, c
 		return nil, err
 	}
 
+	acknowledged := false
+	ackTimeout := time.NewTimer(bestIPFissionRemoteAckTimeout)
+	defer ackTimeout.Stop()
 	timeout := time.NewTimer(bestIPFissionRemoteTimeout)
 	defer timeout.Stop()
 
@@ -83,9 +89,22 @@ func runRemoteBestIPFission(ctx context.Context, userID, probeServerID uint64, c
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-ackTimeout.C:
+			if !acknowledged {
+				return nil, bestIPErrorf("probe server did not acknowledge BestIP fission task; update the agent and try again")
+			}
 		case <-timeout.C:
 			return nil, bestIPErrorf("operation timeout")
 		case result := <-waiter:
+			if !acknowledged {
+				acknowledged = true
+				if !ackTimeout.Stop() {
+					select {
+					case <-ackTimeout.C:
+					default:
+					}
+				}
+			}
 			switch result.Kind {
 			case model.BestIPFissionTaskResultProgress:
 				if result.Event != nil && progress != nil {
