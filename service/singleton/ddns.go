@@ -20,6 +20,10 @@ type DDNSClass struct {
 	class[uint64, *model.DDNSProfile]
 }
 
+type DDNSCredentialClass struct {
+	class[uint64, *model.DDNSCredential]
+}
+
 func NewDDNSClass() *DDNSClass {
 	var sortedList []*model.DDNSProfile
 
@@ -31,6 +35,25 @@ func NewDDNSClass() *DDNSClass {
 
 	dc := &DDNSClass{
 		class: class[uint64, *model.DDNSProfile]{
+			list:       list,
+			sortedList: sortedList,
+		},
+	}
+	return dc
+}
+
+func NewDDNSCredentialClass() *DDNSCredentialClass {
+	var sortedList []*model.DDNSCredential
+
+	DB.Find(&sortedList)
+	list := make(map[uint64]*model.DDNSCredential, len(sortedList))
+	for _, credential := range sortedList {
+		credential.AccessSecretSet = credential.AccessSecret != ""
+		list[credential.ID] = credential
+	}
+
+	dc := &DDNSCredentialClass{
+		class: class[uint64, *model.DDNSCredential]{
 			list:       list,
 			sortedList: sortedList,
 		},
@@ -56,6 +79,26 @@ func (c *DDNSClass) Delete(idList []uint64) {
 	c.sortList()
 }
 
+func (c *DDNSCredentialClass) Update(p *model.DDNSCredential) {
+	p.AccessSecretSet = p.AccessSecret != ""
+
+	c.listMu.Lock()
+	c.list[p.ID] = p
+	c.listMu.Unlock()
+
+	c.sortList()
+}
+
+func (c *DDNSCredentialClass) Delete(idList []uint64) {
+	c.listMu.Lock()
+	for _, id := range idList {
+		delete(c.list, id)
+	}
+	c.listMu.Unlock()
+
+	c.sortList()
+}
+
 func (c *DDNSClass) GetDDNSProvidersFromProfiles(profileId []uint64, ip *model.IP) ([]*ddns2.Provider, error) {
 	profiles := make([]*model.DDNSProfile, 0, len(profileId))
 
@@ -72,6 +115,11 @@ func (c *DDNSClass) GetDDNSProvidersFromProfiles(profileId []uint64, ip *model.I
 
 	providers := make([]*ddns2.Provider, 0, len(profiles))
 	for _, profile := range profiles {
+		effectiveProfile, err := effectiveDDNSProfile(profile)
+		if err != nil {
+			return nil, err
+		}
+		profile = effectiveProfile
 		provider := &ddns2.Provider{DDNSProfile: profile, IPAddrs: ip}
 		switch profile.Provider {
 		case model.ProviderDummy:
@@ -96,12 +144,51 @@ func (c *DDNSClass) GetDDNSProvidersFromProfiles(profileId []uint64, ip *model.I
 	return providers, nil
 }
 
+func effectiveDDNSProfile(profile *model.DDNSProfile) (*model.DDNSProfile, error) {
+	clone := *profile
+	clone.Domains = slices.Clone(profile.Domains)
+	if profile.CredentialID == 0 {
+		return &clone, nil
+	}
+	if DDNSCredentialShared == nil {
+		return nil, fmt.Errorf("DDNS credential cache is not initialized")
+	}
+	credential, ok := DDNSCredentialShared.Get(profile.CredentialID)
+	if !ok {
+		return nil, fmt.Errorf("cannot find DDNS credential %d", profile.CredentialID)
+	}
+	clone.CredentialName = credential.Name
+	clone.Provider = credential.Provider
+	clone.AccessID = credential.AccessID
+	clone.AccessSecret = credential.AccessSecret
+	clone.WebhookURL = credential.WebhookURL
+	clone.WebhookMethod = credential.WebhookMethod
+	clone.WebhookRequestType = credential.WebhookRequestType
+	clone.WebhookRequestBody = credential.WebhookRequestBody
+	clone.WebhookHeaders = credential.WebhookHeaders
+	return &clone, nil
+}
+
 func (c *DDNSClass) sortList() {
 	c.listMu.RLock()
 	defer c.listMu.RUnlock()
 
 	sortedList := utils.MapValuesToSlice(c.list)
 	slices.SortFunc(sortedList, func(a, b *model.DDNSProfile) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
+
+	c.sortedListMu.Lock()
+	defer c.sortedListMu.Unlock()
+	c.sortedList = sortedList
+}
+
+func (c *DDNSCredentialClass) sortList() {
+	c.listMu.RLock()
+	defer c.listMu.RUnlock()
+
+	sortedList := utils.MapValuesToSlice(c.list)
+	slices.SortFunc(sortedList, func(a, b *model.DDNSCredential) int {
 		return cmp.Compare(a.ID, b.ID)
 	})
 

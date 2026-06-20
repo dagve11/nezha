@@ -23,9 +23,11 @@ type DDNSProfile struct {
 	EnableIPv6         *bool    `json:"enable_ipv6,omitempty"`
 	MaxRetries         uint64   `json:"max_retries"`
 	Name               string   `json:"name"`
+	CredentialID       uint64   `gorm:"index" json:"credential_id,omitempty"`
+	CredentialName     string   `gorm:"-" json:"credential_name,omitempty"`
 	Provider           string   `json:"provider"`
 	AccessID           string   `json:"access_id,omitempty"`
-	AccessSecret       string   `json:"access_secret,omitempty"`
+	AccessSecret       string   `json:"-"`
 	WebhookURL         string   `json:"webhook_url,omitempty"`
 	WebhookMethod      uint8    `json:"webhook_method,omitempty"`
 	WebhookRequestType uint8    `json:"webhook_request_type,omitempty"`
@@ -50,4 +52,22 @@ func (d *DDNSProfile) BeforeSave(tx *gorm.DB) error {
 
 func (d *DDNSProfile) AfterFind(tx *gorm.DB) error {
 	return json.Unmarshal([]byte(d.DomainsRaw), &d.Domains)
+}
+
+type DDNSCredential struct {
+	Common
+	Name               string `json:"name"`
+	Provider           string `json:"provider"`
+	AccessID           string `json:"access_id,omitempty"`
+	AccessSecret       string `json:"-"`
+	AccessSecretSet    bool   `gorm:"-" json:"access_secret_set,omitempty"`
+	WebhookURL         string `json:"webhook_url,omitempty"`
+	WebhookMethod      uint8  `json:"webhook_method,omitempty"`
+	WebhookRequestType uint8  `json:"webhook_request_type,omitempty"`
+	WebhookRequestBody string `json:"webhook_request_body,omitempty"`
+	WebhookHeaders     string `json:"webhook_headers,omitempty"`
+}
+
+func (d *DDNSCredential) TableName() string {
+	return "ddns_credentials"
 }

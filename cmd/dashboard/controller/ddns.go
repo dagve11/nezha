@@ -29,6 +29,9 @@ func listDDNS(c *gin.Context) ([]*model.DDNSProfile, error) {
 	if err := copier.Copy(&ddnsProfiles, &list); err != nil {
 		return nil, err
 	}
+	for _, profile := range ddnsProfiles {
+		decorateDDNSProfile(c, profile)
+	}
 
 	return ddnsProfiles, nil
 }
@@ -57,29 +60,8 @@ func createDDNS(c *gin.Context) (uint64, error) {
 	}
 
 	p.UserID = getUid(c)
-	p.Name = df.Name
-	enableIPv4 := df.EnableIPv4
-	enableIPv6 := df.EnableIPv6
-	p.EnableIPv4 = &enableIPv4
-	p.EnableIPv6 = &enableIPv6
-	p.MaxRetries = df.MaxRetries
-	p.Provider = df.Provider
-	p.Domains = df.Domains
-	p.AccessID = df.AccessID
-	p.AccessSecret = df.AccessSecret
-	p.WebhookURL = df.WebhookURL
-	p.WebhookMethod = df.WebhookMethod
-	p.WebhookRequestType = df.WebhookRequestType
-	p.WebhookRequestBody = df.WebhookRequestBody
-	p.WebhookHeaders = df.WebhookHeaders
-
-	for n, domain := range p.Domains {
-		// IDN to ASCII
-		domainValid, domainErr := idna.Lookup.ToASCII(domain)
-		if domainErr != nil {
-			return 0, singleton.Localizer.ErrorT("error parsing %s: %v", domain, domainErr)
-		}
-		p.Domains[n] = domainValid
+	if err := applyDDNSForm(c, &p, df); err != nil {
+		return 0, err
 	}
 
 	if err := singleton.DB.Create(&p).Error; err != nil {
@@ -128,29 +110,8 @@ func updateDDNS(c *gin.Context) (any, error) {
 		return nil, singleton.Localizer.ErrorT("permission denied")
 	}
 
-	p.Name = df.Name
-	enableIPv4 := df.EnableIPv4
-	enableIPv6 := df.EnableIPv6
-	p.EnableIPv4 = &enableIPv4
-	p.EnableIPv6 = &enableIPv6
-	p.MaxRetries = df.MaxRetries
-	p.Provider = df.Provider
-	p.Domains = df.Domains
-	p.AccessID = df.AccessID
-	p.AccessSecret = df.AccessSecret
-	p.WebhookURL = df.WebhookURL
-	p.WebhookMethod = df.WebhookMethod
-	p.WebhookRequestType = df.WebhookRequestType
-	p.WebhookRequestBody = df.WebhookRequestBody
-	p.WebhookHeaders = df.WebhookHeaders
-
-	for n, domain := range p.Domains {
-		// IDN to ASCII
-		domainValid, domainErr := idna.Lookup.ToASCII(domain)
-		if domainErr != nil {
-			return nil, singleton.Localizer.ErrorT("error parsing %s: %v", domain, domainErr)
-		}
-		p.Domains[n] = domainValid
+	if err = applyDDNSForm(c, &p, df); err != nil {
+		return nil, err
 	}
 
 	if err = singleton.DB.Save(&p).Error; err != nil {
@@ -203,4 +164,184 @@ func batchDeleteDDNS(c *gin.Context) (any, error) {
 // @Router /ddns/providers [get]
 func listProviders(c *gin.Context) ([]string, error) {
 	return model.ProviderList[:], nil
+}
+
+func listDDNSCredential(c *gin.Context) ([]*model.DDNSCredential, error) {
+	var credentials []*model.DDNSCredential
+
+	list := singleton.DDNSCredentialShared.GetSortedList()
+	if err := copier.Copy(&credentials, &list); err != nil {
+		return nil, err
+	}
+	for _, credential := range credentials {
+		credential.AccessSecretSet = credential.AccessSecret != ""
+	}
+
+	return credentials, nil
+}
+
+func createDDNSCredential(c *gin.Context) (uint64, error) {
+	var form model.DDNSCredentialForm
+	var credential model.DDNSCredential
+
+	if err := c.ShouldBindJSON(&form); err != nil {
+		return 0, err
+	}
+	if err := applyDDNSCredentialForm(&credential, form, false); err != nil {
+		return 0, err
+	}
+	credential.UserID = getUid(c)
+
+	if err := singleton.DB.Create(&credential).Error; err != nil {
+		return 0, newGormError("%v", err)
+	}
+
+	singleton.DDNSCredentialShared.Update(&credential)
+	return credential.ID, nil
+}
+
+func updateDDNSCredential(c *gin.Context) (any, error) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	var form model.DDNSCredentialForm
+	if err = c.ShouldBindJSON(&form); err != nil {
+		return nil, err
+	}
+
+	var credential model.DDNSCredential
+	if err = singleton.DB.First(&credential, id).Error; err != nil {
+		return nil, singleton.Localizer.ErrorT("credential id %d does not exist", id)
+	}
+	if !credential.HasPermission(c) {
+		return nil, singleton.Localizer.ErrorT("permission denied")
+	}
+	if err = applyDDNSCredentialForm(&credential, form, true); err != nil {
+		return nil, err
+	}
+
+	if err = singleton.DB.Save(&credential).Error; err != nil {
+		return nil, newGormError("%v", err)
+	}
+
+	singleton.DDNSCredentialShared.Update(&credential)
+	return nil, nil
+}
+
+func batchDeleteDDNSCredential(c *gin.Context) (any, error) {
+	var ids []uint64
+
+	if err := c.ShouldBindJSON(&ids); err != nil {
+		return nil, err
+	}
+	if !singleton.DDNSCredentialShared.CheckPermission(c, slices.Values(ids)) {
+		return nil, singleton.Localizer.ErrorT("permission denied")
+	}
+
+	var used int64
+	if err := singleton.DB.Model(&model.DDNSProfile{}).Where("credential_id in ?", ids).Count(&used).Error; err != nil {
+		return nil, newGormError("%v", err)
+	}
+	if used > 0 {
+		return nil, singleton.Localizer.ErrorT("credential is still used by DDNS profiles")
+	}
+
+	if err := singleton.DB.Unscoped().Delete(&model.DDNSCredential{}, "id in (?)", ids).Error; err != nil {
+		return nil, newGormError("%v", err)
+	}
+
+	singleton.DDNSCredentialShared.Delete(ids)
+	return nil, nil
+}
+
+func applyDDNSForm(c *gin.Context, p *model.DDNSProfile, df model.DDNSForm) error {
+	p.Name = df.Name
+	enableIPv4 := df.EnableIPv4
+	enableIPv6 := df.EnableIPv6
+	p.EnableIPv4 = &enableIPv4
+	p.EnableIPv6 = &enableIPv6
+	p.MaxRetries = df.MaxRetries
+	p.CredentialID = df.CredentialID
+	p.Domains = df.Domains
+
+	if p.CredentialID > 0 {
+		credential, err := ddnsCredentialForUse(c, p.CredentialID)
+		if err != nil {
+			return err
+		}
+		applyDDNSCredential(p, credential)
+	} else {
+		p.Provider = df.Provider
+		p.AccessID = df.AccessID
+		p.AccessSecret = df.AccessSecret
+		p.WebhookURL = df.WebhookURL
+		p.WebhookMethod = df.WebhookMethod
+		p.WebhookRequestType = df.WebhookRequestType
+		p.WebhookRequestBody = df.WebhookRequestBody
+		p.WebhookHeaders = df.WebhookHeaders
+	}
+
+	for n, domain := range p.Domains {
+		domainValid, domainErr := idna.Lookup.ToASCII(domain)
+		if domainErr != nil {
+			return singleton.Localizer.ErrorT("error parsing %s: %v", domain, domainErr)
+		}
+		p.Domains[n] = domainValid
+	}
+	return nil
+}
+
+func applyDDNSCredentialForm(credential *model.DDNSCredential, form model.DDNSCredentialForm, preserveSecret bool) error {
+	if !slices.Contains(model.ProviderList[:], form.Provider) {
+		return singleton.Localizer.ErrorT("cannot find DDNS provider %s", form.Provider)
+	}
+	credential.Name = form.Name
+	credential.Provider = form.Provider
+	credential.AccessID = form.AccessID
+	if !preserveSecret || form.AccessSecret != "" {
+		credential.AccessSecret = form.AccessSecret
+	}
+	credential.WebhookURL = form.WebhookURL
+	credential.WebhookMethod = form.WebhookMethod
+	credential.WebhookRequestType = form.WebhookRequestType
+	credential.WebhookRequestBody = form.WebhookRequestBody
+	credential.WebhookHeaders = form.WebhookHeaders
+	credential.AccessSecretSet = credential.AccessSecret != ""
+	return nil
+}
+
+func ddnsCredentialForUse(c *gin.Context, id uint64) (*model.DDNSCredential, error) {
+	credential, ok := singleton.DDNSCredentialShared.Get(id)
+	if !ok {
+		return nil, singleton.Localizer.ErrorT("credential id %d does not exist", id)
+	}
+	if !credential.HasPermission(c) {
+		return nil, singleton.Localizer.ErrorT("permission denied")
+	}
+	return credential, nil
+}
+
+func applyDDNSCredential(p *model.DDNSProfile, credential *model.DDNSCredential) {
+	p.Provider = credential.Provider
+	p.AccessID = credential.AccessID
+	p.AccessSecret = credential.AccessSecret
+	p.WebhookURL = credential.WebhookURL
+	p.WebhookMethod = credential.WebhookMethod
+	p.WebhookRequestType = credential.WebhookRequestType
+	p.WebhookRequestBody = credential.WebhookRequestBody
+	p.WebhookHeaders = credential.WebhookHeaders
+	p.CredentialName = credential.Name
+}
+
+func decorateDDNSProfile(c *gin.Context, p *model.DDNSProfile) {
+	if p.CredentialID == 0 {
+		return
+	}
+	credential, err := ddnsCredentialForUse(c, p.CredentialID)
+	if err != nil {
+		return
+	}
+	applyDDNSCredential(p, credential)
 }

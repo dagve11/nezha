@@ -31,6 +31,7 @@ var (
 	ServerShared           *ServerClass
 	ServiceSentinelShared  *ServiceSentinel
 	DDNSShared             *DDNSClass
+	DDNSCredentialShared   *DDNSCredentialClass
 	NotificationShared     *NotificationClass
 	NATShared              *NATClass
 	CronShared             *CronClass
@@ -60,6 +61,7 @@ func LoadSingleton(bus chan<- *model.Service) (err error) {
 	initI18n() // 加载本地化服务
 	initUser() // 加载用户ID绑定表
 	NATShared = NewNATClass()
+	DDNSCredentialShared = NewDDNSCredentialClass()
 	DDNSShared = NewDDNSClass()
 	NotificationShared = NewNotificationClass()
 	ServerShared = NewServerClass()
@@ -99,7 +101,7 @@ func InitDBFromPath(path string) error {
 	err = DB.AutoMigrate(model.Server{}, model.User{}, model.ServerGroup{}, model.NotificationGroup{},
 		model.Notification{}, model.AlertRule{}, model.Service{}, model.NotificationGroupNotification{},
 		model.Cron{}, model.Transfer{}, model.ServerGroupServer{},
-		model.NAT{}, model.DDNSProfile{}, model.BestIPAutomation{}, model.BestIPAutomationHistory{}, model.NotificationGroupNotification{},
+		model.NAT{}, model.DDNSProfile{}, model.DDNSCredential{}, model.BestIPAutomation{}, model.BestIPAutomationHistory{}, model.NotificationGroupNotification{},
 		model.WAF{}, model.Oauth2Bind{}, model.ServerTransfer{}, model.JWTSession{}, model.DeletedServer{},
 		model.AgentVPNPolicy{}, model.AgentVPNSession{}, model.AgentVPNAuditLog{})
 	if err != nil {

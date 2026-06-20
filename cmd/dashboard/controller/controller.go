@@ -146,9 +146,13 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 
 	auth.GET("/ddns", listHandler(listDDNS))
 	auth.GET("/ddns/providers", commonHandler(listProviders))
+	auth.GET("/ddns-credential", listHandler(listDDNSCredential))
+	auth.POST("/ddns-credential", commonHandler(createDDNSCredential))
+	auth.PATCH("/ddns-credential/:id", commonHandler(updateDDNSCredential))
 	auth.POST("/ddns", commonHandler(createDDNS))
 	auth.PATCH("/ddns/:id", commonHandler(updateDDNS))
 	auth.POST("/batch-delete/ddns", commonHandler(batchDeleteDDNS))
+	auth.POST("/batch-delete/ddns-credential", commonHandler(batchDeleteDDNSCredential))
 
 	auth.POST("/bestip/fission", commonHandler(runBestIPFission))
 	auth.GET("/ws/bestip/fission", commonHandler(streamBestIPFission))
