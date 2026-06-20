@@ -140,6 +140,9 @@ func saveBestIPAutomation(c *gin.Context) (*model.BestIPAutomation, error) {
 	if err := c.ShouldBindJSON(&form); err != nil {
 		return nil, err
 	}
+	if err := assertOwnsNotificationGroup(c, form.FissionNotificationGroupID); err != nil {
+		return nil, err
+	}
 	if err := assertOwnsNotificationGroup(c, form.NotificationGroupID); err != nil {
 		return nil, err
 	}

@@ -91,6 +91,9 @@ func (c *BestIPAutomationClass) SaveForUser(userID uint64, form model.BestIPAuto
 	if !canUseBestIPDDNSCredentials(userID, form.DDNSCredentials) {
 		return nil, Localizer.ErrorT("permission denied")
 	}
+	if err := canUseBestIPNotificationGroup(userID, form.FissionNotificationGroupID); err != nil {
+		return nil, err
+	}
 	if err := canUseBestIPNotificationGroup(userID, form.NotificationGroupID); err != nil {
 		return nil, err
 	}
@@ -108,6 +111,7 @@ func (c *BestIPAutomationClass) SaveForUser(userID uint64, form model.BestIPAuto
 	automation.AutoWriteDNS = form.AutoWriteDNS
 	automation.PushSuccessful = form.PushSuccessful
 	automation.PushFailed = form.PushFailed
+	automation.FissionNotificationGroupID = form.FissionNotificationGroupID
 	automation.NotificationGroupID = form.NotificationGroupID
 	automation.WriteTopN = clampBestIPWriteTopN(form.WriteTopN)
 	automation.DDNSProfiles = normalizeUintList(form.DDNSProfiles)

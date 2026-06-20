@@ -14,37 +14,38 @@ const (
 
 type BestIPAutomation struct {
 	Common
-	Enabled             bool                     `json:"enabled"`
-	Scheduler           string                   `json:"scheduler"`
-	AutoWriteDNS        bool                     `json:"auto_write_dns"`
-	PushSuccessful      bool                     `json:"push_successful"`
-	PushFailed          bool                     `json:"push_failed"`
-	NotificationGroupID uint64                   `json:"notification_group_id"`
-	WriteTopN           int                      `json:"write_top_n"`
-	DDNSProfiles        []uint64                 `json:"ddns_profiles" gorm:"-"`
-	DDNSCredentials     []uint64                 `json:"ddns_credentials" gorm:"-"`
-	Domains             []string                 `json:"domains" gorm:"-"`
-	Fission             bestip.FissionConfig     `json:"fission" gorm:"-"`
-	LastIPv4Records     []string                 `json:"last_ipv4_records" gorm:"-"`
-	LastIPv6Records     []string                 `json:"last_ipv6_records" gorm:"-"`
-	RollbackIPv4Records []string                 `json:"rollback_ipv4_records" gorm:"-"`
-	RollbackIPv6Records []string                 `json:"rollback_ipv6_records" gorm:"-"`
-	LastCandidates      []bestip.CandidateResult `json:"last_candidates" gorm:"-"`
-	LastDNSResults      []BestIPDNSWriteResult   `json:"last_dns_results" gorm:"-"`
-	LastRunAt           time.Time                `json:"last_run_at,omitempty"`
-	LastResult          bool                     `json:"last_result"`
-	LastError           string                   `json:"last_error,omitempty"`
-	CronJobID           uint64                   `json:"cron_job_id,omitempty" gorm:"-"`
-	DDNSProfilesRaw     string                   `json:"-" gorm:"type:text"`
-	DDNSCredentialsRaw  string                   `json:"-" gorm:"type:text"`
-	DomainsRaw          string                   `json:"-" gorm:"type:text"`
-	FissionRaw          string                   `json:"-" gorm:"type:text"`
-	LastIPv4RecordsRaw  string                   `json:"-" gorm:"type:text"`
-	LastIPv6RecordsRaw  string                   `json:"-" gorm:"type:text"`
-	RollbackIPv4Raw     string                   `json:"-" gorm:"type:text"`
-	RollbackIPv6Raw     string                   `json:"-" gorm:"type:text"`
-	LastCandidatesRaw   string                   `json:"-" gorm:"type:text"`
-	LastDNSResultsRaw   string                   `json:"-" gorm:"type:text"`
+	Enabled                    bool                     `json:"enabled"`
+	Scheduler                  string                   `json:"scheduler"`
+	AutoWriteDNS               bool                     `json:"auto_write_dns"`
+	PushSuccessful             bool                     `json:"push_successful"`
+	PushFailed                 bool                     `json:"push_failed"`
+	FissionNotificationGroupID uint64                   `json:"fission_notification_group_id"`
+	NotificationGroupID        uint64                   `json:"notification_group_id"`
+	WriteTopN                  int                      `json:"write_top_n"`
+	DDNSProfiles               []uint64                 `json:"ddns_profiles" gorm:"-"`
+	DDNSCredentials            []uint64                 `json:"ddns_credentials" gorm:"-"`
+	Domains                    []string                 `json:"domains" gorm:"-"`
+	Fission                    bestip.FissionConfig     `json:"fission" gorm:"-"`
+	LastIPv4Records            []string                 `json:"last_ipv4_records" gorm:"-"`
+	LastIPv6Records            []string                 `json:"last_ipv6_records" gorm:"-"`
+	RollbackIPv4Records        []string                 `json:"rollback_ipv4_records" gorm:"-"`
+	RollbackIPv6Records        []string                 `json:"rollback_ipv6_records" gorm:"-"`
+	LastCandidates             []bestip.CandidateResult `json:"last_candidates" gorm:"-"`
+	LastDNSResults             []BestIPDNSWriteResult   `json:"last_dns_results" gorm:"-"`
+	LastRunAt                  time.Time                `json:"last_run_at,omitempty"`
+	LastResult                 bool                     `json:"last_result"`
+	LastError                  string                   `json:"last_error,omitempty"`
+	CronJobID                  uint64                   `json:"cron_job_id,omitempty" gorm:"-"`
+	DDNSProfilesRaw            string                   `json:"-" gorm:"type:text"`
+	DDNSCredentialsRaw         string                   `json:"-" gorm:"type:text"`
+	DomainsRaw                 string                   `json:"-" gorm:"type:text"`
+	FissionRaw                 string                   `json:"-" gorm:"type:text"`
+	LastIPv4RecordsRaw         string                   `json:"-" gorm:"type:text"`
+	LastIPv6RecordsRaw         string                   `json:"-" gorm:"type:text"`
+	RollbackIPv4Raw            string                   `json:"-" gorm:"type:text"`
+	RollbackIPv6Raw            string                   `json:"-" gorm:"type:text"`
+	LastCandidatesRaw          string                   `json:"-" gorm:"type:text"`
+	LastDNSResultsRaw          string                   `json:"-" gorm:"type:text"`
 }
 
 type BestIPAutomationHistory struct {
@@ -70,17 +71,18 @@ type BestIPAutomationHistory struct {
 }
 
 type BestIPAutomationForm struct {
-	Enabled             bool                 `json:"enabled"`
-	Scheduler           string               `json:"scheduler"`
-	AutoWriteDNS        bool                 `json:"auto_write_dns"`
-	PushSuccessful      bool                 `json:"push_successful"`
-	PushFailed          bool                 `json:"push_failed"`
-	NotificationGroupID uint64               `json:"notification_group_id,omitempty"`
-	WriteTopN           int                  `json:"write_top_n"`
-	DDNSProfiles        []uint64             `json:"ddns_profiles,omitempty"`
-	DDNSCredentials     []uint64             `json:"ddns_credentials,omitempty"`
-	Domains             []string             `json:"domains,omitempty"`
-	Fission             bestip.FissionConfig `json:"fission"`
+	Enabled                    bool                 `json:"enabled"`
+	Scheduler                  string               `json:"scheduler"`
+	AutoWriteDNS               bool                 `json:"auto_write_dns"`
+	PushSuccessful             bool                 `json:"push_successful"`
+	PushFailed                 bool                 `json:"push_failed"`
+	FissionNotificationGroupID uint64               `json:"fission_notification_group_id,omitempty"`
+	NotificationGroupID        uint64               `json:"notification_group_id,omitempty"`
+	WriteTopN                  int                  `json:"write_top_n"`
+	DDNSProfiles               []uint64             `json:"ddns_profiles,omitempty"`
+	DDNSCredentials            []uint64             `json:"ddns_credentials,omitempty"`
+	Domains                    []string             `json:"domains,omitempty"`
+	Fission                    bestip.FissionConfig `json:"fission"`
 }
 
 func (a *BestIPAutomation) BeforeSave(tx *gorm.DB) error {

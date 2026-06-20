@@ -123,15 +123,16 @@ func TestBestIPAutomationRunWritesTopCandidateStoresRollbackPointAndNotifies(t *
 	}
 
 	saved, err := automation.SaveForUser(200, model.BestIPAutomationForm{
-		Enabled:             true,
-		Scheduler:           "0 */30 * * * *",
-		AutoWriteDNS:        true,
-		PushSuccessful:      true,
-		PushFailed:          true,
-		NotificationGroupID: 9,
-		WriteTopN:           1,
-		DDNSProfiles:        []uint64{7},
-		Domains:             []string{"cdn.example.com"},
+		Enabled:                    true,
+		Scheduler:                  "0 */30 * * * *",
+		AutoWriteDNS:               true,
+		PushSuccessful:             true,
+		PushFailed:                 true,
+		FissionNotificationGroupID: 9,
+		NotificationGroupID:        9,
+		WriteTopN:                  1,
+		DDNSProfiles:               []uint64{7},
+		Domains:                    []string{"cdn.example.com"},
 		Fission: bestip.FissionConfig{
 			SeedIPs:        []string{"1.1.1.1"},
 			Rounds:         1,
@@ -163,6 +164,7 @@ func TestBestIPAutomationRunWritesTopCandidateStoresRollbackPointAndNotifies(t *
 	require.True(t, updated.LastDNSResults[0].Success)
 	require.NotZero(t, updated.LastRunAt)
 	require.True(t, updated.LastResult)
+	require.Equal(t, uint64(9), updated.FissionNotificationGroupID)
 	require.Equal(t, uint64(9), updated.NotificationGroupID)
 	require.True(t, updated.PushSuccessful)
 	require.True(t, updated.PushFailed)

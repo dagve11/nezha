@@ -270,6 +270,7 @@ func TestSaveGetRunAndRollbackBestIPAutomation(t *testing.T) {
 		"auto_write_dns":true,
 		"push_successful":true,
 		"push_failed":true,
+		"fission_notification_group_id":9,
 		"notification_group_id":9,
 		"write_top_n":1,
 		"ddns_profiles":[7],
@@ -292,6 +293,7 @@ func TestSaveGetRunAndRollbackBestIPAutomation(t *testing.T) {
 	require.NotZero(t, saved.CronJobID)
 	require.True(t, saved.PushSuccessful)
 	require.True(t, saved.PushFailed)
+	require.Equal(t, uint64(9), saved.FissionNotificationGroupID)
 	require.Equal(t, uint64(9), saved.NotificationGroupID)
 
 	saved.LastIPv4Records = []string{"9.9.9.9"}
@@ -325,6 +327,7 @@ func TestSaveBestIPAutomationRejectsForeignNotificationGroup(t *testing.T) {
 		"scheduler":"0 */30 * * * *",
 		"auto_write_dns":true,
 		"push_successful":true,
+		"fission_notification_group_id":10,
 		"notification_group_id":10,
 		"write_top_n":1,
 		"ddns_profiles":[7],
