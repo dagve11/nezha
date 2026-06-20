@@ -24,6 +24,8 @@ type DDNSCredentialClass struct {
 	class[uint64, *model.DDNSCredential]
 }
 
+const defaultDDNSCredentialMaxRetries uint64 = 3
+
 func NewDDNSClass() *DDNSClass {
 	var sortedList []*model.DDNSProfile
 
@@ -119,29 +121,71 @@ func (c *DDNSClass) GetDDNSProvidersFromProfiles(profileId []uint64, ip *model.I
 		if err != nil {
 			return nil, err
 		}
-		profile = effectiveProfile
-		provider := &ddns2.Provider{DDNSProfile: profile, IPAddrs: ip}
-		switch profile.Provider {
-		case model.ProviderDummy:
-			provider.Setter = &dummy.Provider{}
-			providers = append(providers, provider)
-		case model.ProviderWebHook:
-			provider.Setter = &webhook.Provider{DDNSProfile: profile}
-			providers = append(providers, provider)
-		case model.ProviderCloudflare:
-			provider.Setter = &cloudflare.Provider{APIToken: profile.AccessSecret}
-			providers = append(providers, provider)
-		case model.ProviderTencentCloud:
-			provider.Setter = &tencentcloud.Provider{SecretId: profile.AccessID, SecretKey: profile.AccessSecret}
-			providers = append(providers, provider)
-		case model.ProviderHE:
-			provider.Setter = &he.Provider{APIKey: profile.AccessSecret}
-			providers = append(providers, provider)
-		default:
-			return nil, fmt.Errorf("cannot find DDNS provider %s", profile.Provider)
+		provider, err := ddnsProviderFromProfile(effectiveProfile, ip)
+		if err != nil {
+			return nil, err
 		}
+		providers = append(providers, provider)
 	}
 	return providers, nil
+}
+
+func GetDDNSProvidersFromCredentials(credentialIDs []uint64, domains []string, ip *model.IP) ([]*ddns2.Provider, error) {
+	if DDNSCredentialShared == nil {
+		return nil, fmt.Errorf("DDNS credential cache is not initialized")
+	}
+	providers := make([]*ddns2.Provider, 0, len(credentialIDs))
+	for _, id := range credentialIDs {
+		credential, ok := DDNSCredentialShared.Get(id)
+		if !ok {
+			return nil, fmt.Errorf("cannot find DDNS credential %d", id)
+		}
+		enableIPv4 := true
+		enableIPv6 := true
+		profile := &model.DDNSProfile{
+			Common:             model.Common{UserID: credential.GetUserID()},
+			CredentialID:       credential.ID,
+			CredentialName:     credential.Name,
+			Name:               credential.Name,
+			Provider:           credential.Provider,
+			AccessID:           credential.AccessID,
+			AccessSecret:       credential.AccessSecret,
+			WebhookURL:         credential.WebhookURL,
+			WebhookMethod:      credential.WebhookMethod,
+			WebhookRequestType: credential.WebhookRequestType,
+			WebhookRequestBody: credential.WebhookRequestBody,
+			WebhookHeaders:     credential.WebhookHeaders,
+			Domains:            slices.Clone(domains),
+			EnableIPv4:         &enableIPv4,
+			EnableIPv6:         &enableIPv6,
+			MaxRetries:         defaultDDNSCredentialMaxRetries,
+		}
+		provider, err := ddnsProviderFromProfile(profile, ip)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, provider)
+	}
+	return providers, nil
+}
+
+func ddnsProviderFromProfile(profile *model.DDNSProfile, ip *model.IP) (*ddns2.Provider, error) {
+	provider := &ddns2.Provider{DDNSProfile: profile, IPAddrs: ip}
+	switch profile.Provider {
+	case model.ProviderDummy:
+		provider.Setter = &dummy.Provider{}
+	case model.ProviderWebHook:
+		provider.Setter = &webhook.Provider{DDNSProfile: profile}
+	case model.ProviderCloudflare:
+		provider.Setter = &cloudflare.Provider{APIToken: profile.AccessSecret}
+	case model.ProviderTencentCloud:
+		provider.Setter = &tencentcloud.Provider{SecretId: profile.AccessID, SecretKey: profile.AccessSecret}
+	case model.ProviderHE:
+		provider.Setter = &he.Provider{APIKey: profile.AccessSecret}
+	default:
+		return nil, fmt.Errorf("cannot find DDNS provider %s", profile.Provider)
+	}
+	return provider, nil
 }
 
 func effectiveDDNSProfile(profile *model.DDNSProfile) (*model.DDNSProfile, error) {

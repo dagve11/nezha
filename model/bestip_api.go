@@ -7,20 +7,22 @@ type BestIPFissionResult = bestip.FissionRunResult
 type BestIPFissionRoundResult = bestip.FissionRoundResult
 
 type BestIPDNSWriteForm struct {
-	DDNSProfiles []uint64 `json:"ddns_profiles,omitempty"`
-	Domains      []string `json:"domains,omitempty"`
-	IPv4         string   `json:"ipv4,omitempty"`
-	IPv6         string   `json:"ipv6,omitempty"`
-	IPv4Records  []string `json:"ipv4_records,omitempty"`
-	IPv6Records  []string `json:"ipv6_records,omitempty"`
+	DDNSProfiles    []uint64 `json:"ddns_profiles,omitempty"`
+	DDNSCredentials []uint64 `json:"ddns_credentials,omitempty"`
+	Domains         []string `json:"domains,omitempty"`
+	IPv4            string   `json:"ipv4,omitempty"`
+	IPv6            string   `json:"ipv6,omitempty"`
+	IPv4Records     []string `json:"ipv4_records,omitempty"`
+	IPv6Records     []string `json:"ipv6_records,omitempty"`
 }
 
 type BestIPDNSWriteResult struct {
-	ProfileID uint64   `json:"profile_id"`
-	Provider  string   `json:"provider"`
-	Domains   []string `json:"domains"`
-	Success   bool     `json:"success"`
-	Error     string   `json:"error,omitempty"`
+	ProfileID    uint64   `json:"profile_id,omitempty"`
+	CredentialID uint64   `json:"credential_id,omitempty"`
+	Provider     string   `json:"provider"`
+	Domains      []string `json:"domains"`
+	Success      bool     `json:"success"`
+	Error        string   `json:"error,omitempty"`
 }
 
 type BestIPNotifyForm struct {

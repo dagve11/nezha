@@ -22,6 +22,7 @@ type BestIPAutomation struct {
 	NotificationGroupID uint64                   `json:"notification_group_id"`
 	WriteTopN           int                      `json:"write_top_n"`
 	DDNSProfiles        []uint64                 `json:"ddns_profiles" gorm:"-"`
+	DDNSCredentials     []uint64                 `json:"ddns_credentials" gorm:"-"`
 	Domains             []string                 `json:"domains" gorm:"-"`
 	Fission             bestip.FissionConfig     `json:"fission" gorm:"-"`
 	LastIPv4Records     []string                 `json:"last_ipv4_records" gorm:"-"`
@@ -35,6 +36,7 @@ type BestIPAutomation struct {
 	LastError           string                   `json:"last_error,omitempty"`
 	CronJobID           uint64                   `json:"cron_job_id,omitempty" gorm:"-"`
 	DDNSProfilesRaw     string                   `json:"-" gorm:"type:text"`
+	DDNSCredentialsRaw  string                   `json:"-" gorm:"type:text"`
 	DomainsRaw          string                   `json:"-" gorm:"type:text"`
 	FissionRaw          string                   `json:"-" gorm:"type:text"`
 	LastIPv4RecordsRaw  string                   `json:"-" gorm:"type:text"`
@@ -76,6 +78,7 @@ type BestIPAutomationForm struct {
 	NotificationGroupID uint64               `json:"notification_group_id,omitempty"`
 	WriteTopN           int                  `json:"write_top_n"`
 	DDNSProfiles        []uint64             `json:"ddns_profiles,omitempty"`
+	DDNSCredentials     []uint64             `json:"ddns_credentials,omitempty"`
 	Domains             []string             `json:"domains,omitempty"`
 	Fission             bestip.FissionConfig `json:"fission"`
 }
@@ -83,6 +86,7 @@ type BestIPAutomationForm struct {
 func (a *BestIPAutomation) BeforeSave(tx *gorm.DB) error {
 	return firstJSONError(
 		marshalRaw(a.DDNSProfiles, &a.DDNSProfilesRaw),
+		marshalRaw(a.DDNSCredentials, &a.DDNSCredentialsRaw),
 		marshalRaw(a.Domains, &a.DomainsRaw),
 		marshalRaw(a.Fission, &a.FissionRaw),
 		marshalRaw(a.LastIPv4Records, &a.LastIPv4RecordsRaw),
@@ -97,6 +101,7 @@ func (a *BestIPAutomation) BeforeSave(tx *gorm.DB) error {
 func (a *BestIPAutomation) AfterFind(tx *gorm.DB) error {
 	return firstJSONError(
 		unmarshalRaw(a.DDNSProfilesRaw, &a.DDNSProfiles),
+		unmarshalRaw(a.DDNSCredentialsRaw, &a.DDNSCredentials),
 		unmarshalRaw(a.DomainsRaw, &a.Domains),
 		unmarshalRaw(a.FissionRaw, &a.Fission),
 		unmarshalRaw(a.LastIPv4RecordsRaw, &a.LastIPv4Records),

@@ -24,6 +24,7 @@ func setupBestIPAutomationFixture(t *testing.T) *BestIPAutomationClass {
 	originalConf := Conf
 	originalLocalizer := Localizer
 	originalDDNSShared := DDNSShared
+	originalDDNSCredentialShared := DDNSCredentialShared
 	originalCronShared := CronShared
 	originalRunner := BestIPAutomationFissionRunner
 	originalNotificationSender := BestIPNotificationSender
@@ -32,6 +33,7 @@ func setupBestIPAutomationFixture(t *testing.T) *BestIPAutomationClass {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&model.DDNSProfile{},
+		&model.DDNSCredential{},
 		&model.NotificationGroup{},
 		&model.BestIPAutomation{},
 		&model.BestIPAutomationHistory{},
@@ -49,6 +51,11 @@ func setupBestIPAutomationFixture(t *testing.T) *BestIPAutomationClass {
 		Domains:    []string{"cdn.example.com"},
 		DomainsRaw: `["cdn.example.com"]`,
 	}).Error)
+	require.NoError(t, db.Create(&model.DDNSCredential{
+		Common:   model.Common{ID: 8, UserID: 200},
+		Name:     "dummy-credential",
+		Provider: model.ProviderDummy,
+	}).Error)
 	require.NoError(t, db.Create(&model.NotificationGroup{
 		Common: model.Common{ID: 9, UserID: 200},
 		Name:   "bestip-notify",
@@ -61,6 +68,7 @@ func setupBestIPAutomationFixture(t *testing.T) *BestIPAutomationClass {
 	}}
 	Localizer = i18n.NewLocalizer("en_US", "nezha", "translations", i18n.Translations)
 	DDNSShared = NewDDNSClass()
+	DDNSCredentialShared = NewDDNSCredentialClass()
 	CronShared = &CronClass{Cron: cron.New(cron.WithSeconds())}
 
 	t.Cleanup(func() {
@@ -69,12 +77,31 @@ func setupBestIPAutomationFixture(t *testing.T) *BestIPAutomationClass {
 		Conf = originalConf
 		Localizer = originalLocalizer
 		DDNSShared = originalDDNSShared
+		DDNSCredentialShared = originalDDNSCredentialShared
 		CronShared = originalCronShared
 		BestIPAutomationFissionRunner = originalRunner
 		BestIPNotificationSender = originalNotificationSender
 	})
 
 	return NewBestIPAutomationClass()
+}
+
+func TestWriteBestIPDNSUsesDDNSCredentialsWithOverrideDomains(t *testing.T) {
+	setupBestIPAutomationFixture(t)
+
+	results, err := WriteBestIPDNS(context.Background(), 200, model.BestIPDNSWriteForm{
+		DDNSCredentials: []uint64{8},
+		Domains:         []string{"best.example.com"},
+		IPv4Records:     []string{"1.0.0.1"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Zero(t, results[0].ProfileID)
+	require.Equal(t, uint64(8), results[0].CredentialID)
+	require.Equal(t, model.ProviderDummy, results[0].Provider)
+	require.Equal(t, []string{"best.example.com"}, results[0].Domains)
+	require.True(t, results[0].Success)
 }
 
 func TestBestIPAutomationRunWritesTopCandidateStoresRollbackPointAndNotifies(t *testing.T) {

@@ -25,13 +25,14 @@ type BestIPAutomationClass struct {
 }
 
 type BestIPDNSWriteRequest struct {
-	UserID       uint64
-	DDNSProfiles []uint64
-	Domains      []string
-	IPv4         string
-	IPv6         string
-	IPv4Records  []string
-	IPv6Records  []string
+	UserID          uint64
+	DDNSProfiles    []uint64
+	DDNSCredentials []uint64
+	Domains         []string
+	IPv4            string
+	IPv6            string
+	IPv4Records     []string
+	IPv6Records     []string
 }
 
 var BestIPAutomationFissionRunner = func(ctx context.Context, config bestip.FissionConfig) (*bestip.FissionRunResult, error) {
@@ -87,6 +88,9 @@ func (c *BestIPAutomationClass) SaveForUser(userID uint64, form model.BestIPAuto
 	if !canUseBestIPDDNSProfiles(userID, form.DDNSProfiles) {
 		return nil, Localizer.ErrorT("permission denied")
 	}
+	if !canUseBestIPDDNSCredentials(userID, form.DDNSCredentials) {
+		return nil, Localizer.ErrorT("permission denied")
+	}
 	if err := canUseBestIPNotificationGroup(userID, form.NotificationGroupID); err != nil {
 		return nil, err
 	}
@@ -107,6 +111,7 @@ func (c *BestIPAutomationClass) SaveForUser(userID uint64, form model.BestIPAuto
 	automation.NotificationGroupID = form.NotificationGroupID
 	automation.WriteTopN = clampBestIPWriteTopN(form.WriteTopN)
 	automation.DDNSProfiles = normalizeUintList(form.DDNSProfiles)
+	automation.DDNSCredentials = normalizeUintList(form.DDNSCredentials)
 	automation.Domains = normalizeStringList(form.Domains)
 	automation.Fission = config
 
@@ -211,10 +216,11 @@ func (c *BestIPAutomationClass) RollbackByID(ctx context.Context, id uint64) (*m
 	}
 
 	results, err := WriteBestIPDNS(ctx, automation.GetUserID(), model.BestIPDNSWriteForm{
-		DDNSProfiles: automation.DDNSProfiles,
-		Domains:      automation.Domains,
-		IPv4Records:  targetIPv4,
-		IPv6Records:  targetIPv6,
+		DDNSProfiles:    automation.DDNSProfiles,
+		DDNSCredentials: automation.DDNSCredentials,
+		Domains:         automation.Domains,
+		IPv4Records:     targetIPv4,
+		IPv6Records:     targetIPv6,
 	})
 	history.DNSResults = results
 	automation.LastDNSResults = results
@@ -287,10 +293,11 @@ func (c *BestIPAutomationClass) run(ctx context.Context, automation *model.BestI
 		history.RollbackIPv6Records = slices.Clone(automation.LastIPv6Records)
 
 		results, err := WriteBestIPDNS(ctx, automation.GetUserID(), model.BestIPDNSWriteForm{
-			DDNSProfiles: automation.DDNSProfiles,
-			Domains:      automation.Domains,
-			IPv4Records:  ipv4Records,
-			IPv6Records:  ipv6Records,
+			DDNSProfiles:    automation.DDNSProfiles,
+			DDNSCredentials: automation.DDNSCredentials,
+			Domains:         automation.Domains,
+			IPv4Records:     ipv4Records,
+			IPv6Records:     ipv6Records,
 		})
 		history.DNSResults = results
 		automation.LastDNSResults = results
@@ -538,34 +545,48 @@ func validateBestIPAutomationScheduler(scheduler string) error {
 }
 
 func WriteBestIPDNS(ctx context.Context, userID uint64, form model.BestIPDNSWriteForm) ([]model.BestIPDNSWriteResult, error) {
-	if len(form.DDNSProfiles) == 0 {
-		return nil, Localizer.ErrorT("DDNS profile id is required")
+	if len(form.DDNSCredentials) == 0 && len(form.DDNSProfiles) == 0 {
+		return nil, Localizer.ErrorT("DDNS credential id is required")
 	}
 	ipRecords := normalizeBestIPDNSRecords(form)
 	if len(ipRecords.IPv4Addrs) == 0 && len(ipRecords.IPv6Addrs) == 0 {
 		return nil, Localizer.ErrorT("at least one IP address is required")
 	}
-	if !canUseBestIPDDNSProfiles(userID, form.DDNSProfiles) {
+	if !canUseBestIPDDNSCredentials(userID, form.DDNSCredentials) || !canUseBestIPDDNSProfiles(userID, form.DDNSProfiles) {
 		return nil, Localizer.ErrorT("permission denied")
 	}
 
 	ctx = withBestIPDNSServers(ctx)
 	ip := &model.IP{IPv4Addr: firstBestIPRecord(ipRecords.IPv4Addrs), IPv6Addr: firstBestIPRecord(ipRecords.IPv6Addrs)}
-	providers, err := DDNSShared.GetDDNSProvidersFromProfiles(form.DDNSProfiles, ip)
-	if err != nil {
-		return nil, err
+	domains := normalizeStringList(form.Domains)
+	var providers []*ddns2.Provider
+	var err error
+	if len(form.DDNSCredentials) > 0 {
+		if len(domains) == 0 {
+			return nil, Localizer.ErrorT("domain is required")
+		}
+		providers, err = GetDDNSProvidersFromCredentials(form.DDNSCredentials, domains, ip)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		providers, err = DDNSShared.GetDDNSProvidersFromProfiles(form.DDNSProfiles, ip)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	results := make([]model.BestIPDNSWriteResult, 0, len(providers))
 	for _, provider := range providers {
 		provider.IPRecords = ipRecords
 		applyBestIPDNSRecordFamilies(provider, ipRecords)
-		domainResults := provider.UpdateDomain(ctx, form.Domains...)
+		domainResults := provider.UpdateDomain(ctx, domains...)
 		item := model.BestIPDNSWriteResult{
-			ProfileID: provider.GetProfileID(),
-			Provider:  provider.DDNSProfile.Provider,
-			Domains:   domainsFromBestIPDNSResults(domainResults),
-			Success:   true,
+			ProfileID:    provider.GetProfileID(),
+			CredentialID: provider.DDNSProfile.CredentialID,
+			Provider:     provider.DDNSProfile.Provider,
+			Domains:      domainsFromBestIPDNSResults(domainResults),
+			Success:      true,
 		}
 		for _, domainResult := range domainResults {
 			if !domainResult.Success {
@@ -633,6 +654,22 @@ func canUseBestIPDDNSProfiles(userID uint64, profileIDs []uint64) bool {
 			return false
 		}
 		if profile.GetUserID() != userID && !userIsAdmin(userID) {
+			return false
+		}
+	}
+	return true
+}
+
+func canUseBestIPDDNSCredentials(userID uint64, credentialIDs []uint64) bool {
+	if len(credentialIDs) > 0 && DDNSCredentialShared == nil {
+		return false
+	}
+	for _, id := range credentialIDs {
+		credential, ok := DDNSCredentialShared.Get(id)
+		if !ok {
+			return false
+		}
+		if credential.GetUserID() != userID && !userIsAdmin(userID) {
 			return false
 		}
 	}
