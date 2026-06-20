@@ -11,14 +11,12 @@ import (
 	"github.com/nezhahq/nezha/service/singleton"
 )
 
-var bestIPFissionRunner = func(ctx context.Context, config bestip.FissionConfig) (*bestip.FissionRunResult, error) {
-	return bestip.NewFissionService(config).Run(ctx)
+var bestIPFissionRunner = func(ctx context.Context, userID uint64, form model.BestIPFissionForm) (*bestip.FissionRunResult, error) {
+	return singleton.RunBestIPFission(ctx, userID, form, nil)
 }
 
-var bestIPFissionStreamRunner = func(ctx context.Context, config bestip.FissionConfig, progress func(bestip.FissionProgressEvent)) (*bestip.FissionRunResult, error) {
-	service := bestip.NewFissionService(config)
-	service.Progress = progress
-	return service.Run(ctx)
+var bestIPFissionStreamRunner = func(ctx context.Context, userID uint64, form model.BestIPFissionForm, progress func(bestip.FissionProgressEvent)) (*bestip.FissionRunResult, error) {
+	return singleton.RunBestIPFission(ctx, userID, form, progress)
 }
 
 // Run Best IP fission
@@ -37,7 +35,7 @@ func runBestIPFission(c *gin.Context) (*model.BestIPFissionResult, error) {
 	if err := c.ShouldBindJSON(&form); err != nil {
 		return nil, err
 	}
-	result, err := bestIPFissionRunner(c.Request.Context(), form)
+	result, err := bestIPFissionRunner(c.Request.Context(), getUid(c), form)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +73,7 @@ func streamBestIPFission(c *gin.Context) (any, error) {
 		return nil
 	}
 
-	_, err = bestIPFissionStreamRunner(ctx, form, func(event bestip.FissionProgressEvent) {
+	_, err = bestIPFissionStreamRunner(ctx, getUid(c), form, func(event bestip.FissionProgressEvent) {
 		_ = writeEvent(event)
 	})
 	if err != nil {

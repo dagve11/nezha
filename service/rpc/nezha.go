@@ -139,6 +139,8 @@ func (s *NezhaHandler) RequestTask(stream pb.NezhaService_RequestTaskServer) err
 			if _, err := singleton.VPNShared.HandleControlResult(clientID, vpnResult); err != nil {
 				log.Printf("NEZHA>> VPNControl result ignored: clientID=%d session=%s role=%s: %v", clientID, vpnResult.SessionID, vpnResult.Role, err)
 			}
+		case model.TaskTypeBestIPFission:
+			singleton.HandleBestIPFissionTaskResult(clientID, result)
 		default:
 			if model.IsServiceSentinelNeeded(result.GetType()) {
 				singleton.ServiceSentinelShared.Dispatch(singleton.ReportData{

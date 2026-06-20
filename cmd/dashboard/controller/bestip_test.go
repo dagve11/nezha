@@ -104,7 +104,8 @@ func setupBestIPControllerFixture(t *testing.T) *gin.Context {
 
 func TestRunBestIPFissionUsesRequestConfig(t *testing.T) {
 	ctx := setupBestIPControllerFixture(t)
-	bestIPFissionRunner = func(_ context.Context, config bestip.FissionConfig) (*bestip.FissionRunResult, error) {
+	bestIPFissionRunner = func(_ context.Context, userID uint64, config bestip.FissionConfig) (*bestip.FissionRunResult, error) {
+		require.Equal(t, uint64(200), userID)
 		require.Equal(t, []string{"1.1.1.1"}, config.SeedIPs)
 		require.Equal(t, 2, config.Rounds)
 		return &bestip.FissionRunResult{
@@ -135,7 +136,8 @@ func TestStreamBestIPFissionWritesProgressEvents(t *testing.T) {
 	setupBestIPControllerFixture(t)
 	InitUpgrader()
 
-	bestIPFissionStreamRunner = func(_ context.Context, config bestip.FissionConfig, progress func(bestip.FissionProgressEvent)) (*bestip.FissionRunResult, error) {
+	bestIPFissionStreamRunner = func(_ context.Context, userID uint64, config bestip.FissionConfig, progress func(bestip.FissionProgressEvent)) (*bestip.FissionRunResult, error) {
+		require.Equal(t, uint64(200), userID)
 		require.Equal(t, []string{"1.1.1.1"}, config.SeedIPs)
 		require.Equal(t, 1, config.Rounds)
 
@@ -163,6 +165,9 @@ func TestStreamBestIPFissionWritesProgressEvents(t *testing.T) {
 	}
 
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		setAuthUser(c, 200, model.RoleMember)
+	})
 	r.GET("/api/v1/ws/bestip/fission", commonHandler(streamBestIPFission))
 	server := httptest.NewServer(r)
 	defer server.Close()

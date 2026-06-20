@@ -6,6 +6,23 @@ type BestIPFissionForm = bestip.FissionConfig
 type BestIPFissionResult = bestip.FissionRunResult
 type BestIPFissionRoundResult = bestip.FissionRoundResult
 
+const (
+	BestIPFissionTaskResultProgress = "progress"
+	BestIPFissionTaskResultDone     = "done"
+	BestIPFissionTaskResultError    = "error"
+)
+
+type BestIPFissionTaskRequest struct {
+	Config bestip.FissionConfig `json:"config"`
+}
+
+type BestIPFissionTaskResult struct {
+	Kind   string                       `json:"kind"`
+	Event  *bestip.FissionProgressEvent `json:"event,omitempty"`
+	Result *bestip.FissionRunResult     `json:"result,omitempty"`
+	Error  string                       `json:"error,omitempty"`
+}
+
 type BestIPDNSWriteForm struct {
 	DDNSProfiles    []uint64 `json:"ddns_profiles,omitempty"`
 	DDNSCredentials []uint64 `json:"ddns_credentials,omitempty"`

@@ -40,8 +40,9 @@ const (
 	// Keep this explicit because the standalone agent has additional MCP task
 	// types between ServerTransferApply and DestroyAgent. Dashboard and agent
 	// must agree on the wire value.
-	TaskTypeDestroyAgent = 21
-	TaskTypeVPNControl   = 22
+	TaskTypeDestroyAgent  = 21
+	TaskTypeVPNControl    = 22
+	TaskTypeBestIPFission = 23
 )
 
 type TerminalTask struct {
@@ -152,7 +153,8 @@ func IsServiceSentinelNeeded(t uint64) bool {
 		TaskTypeReportConfig, TaskTypeApplyConfig,
 		TaskTypeServerTransferApply, TaskTypeDestroyAgent,
 		TaskTypeExec, TaskTypeFsList, TaskTypeFsRead, TaskTypeFsWrite,
-		TaskTypeFsDelete, TaskTypeFsTransfer, TaskTypeVPNControl:
+		TaskTypeFsDelete, TaskTypeFsTransfer, TaskTypeVPNControl,
+		TaskTypeBestIPFission:
 		return false
 	default:
 		return true

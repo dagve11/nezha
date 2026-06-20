@@ -22,6 +22,7 @@ import (
 
 type FissionConfig struct {
 	SeedIPs           []string `json:"seed_ips"`
+	ProbeServerID     uint64   `json:"probe_server_id,omitempty"`
 	Rounds            int      `json:"rounds"`
 	Concurrency       int      `json:"concurrency"`
 	TimeoutMS         int      `json:"timeout_ms"`

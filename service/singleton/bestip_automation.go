@@ -36,7 +36,7 @@ type BestIPDNSWriteRequest struct {
 }
 
 var BestIPAutomationFissionRunner = func(ctx context.Context, config bestip.FissionConfig) (*bestip.FissionRunResult, error) {
-	return bestip.NewFissionService(config).Run(ctx)
+	return RunBestIPFission(ctx, 0, config, nil)
 }
 
 var BestIPNotificationSender = func(groupID uint64, message string, muteLabel string) {
@@ -99,6 +99,9 @@ func (c *BestIPAutomationClass) SaveForUser(userID uint64, form model.BestIPAuto
 	}
 	config, err := bestip.NormalizeFissionConfig(form.Fission)
 	if err != nil {
+		return nil, err
+	}
+	if err := canUseBestIPProbeServer(userID, config.ProbeServerID); err != nil {
 		return nil, err
 	}
 
@@ -278,6 +281,9 @@ func (c *BestIPAutomationClass) run(ctx context.Context, automation *model.BestI
 		StartedAt:    time.Now(),
 	}
 
+	if err := canUseBestIPProbeServer(automation.GetUserID(), automation.Fission.ProbeServerID); err != nil {
+		return c.finishAutomationFailure(automation, history, err)
+	}
 	result, err := BestIPAutomationFissionRunner(ctx, automation.Fission)
 	if err != nil {
 		return c.finishAutomationFailure(automation, history, err)

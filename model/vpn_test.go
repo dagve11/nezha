@@ -24,6 +24,7 @@ func TestVPNTaskTypesUseAgentWireValues(t *testing.T) {
 		{"fs_transfer", TaskTypeFsTransfer, 20},
 		{"destroy_agent", TaskTypeDestroyAgent, 21},
 		{"vpn_control", TaskTypeVPNControl, 22},
+		{"bestip_fission", TaskTypeBestIPFission, 23},
 	}
 
 	for _, tc := range cases {
@@ -36,6 +37,9 @@ func TestVPNTaskTypesUseAgentWireValues(t *testing.T) {
 
 	if IsServiceSentinelNeeded(TaskTypeVPNControl) {
 		t.Fatal("TaskTypeVPNControl must not be routed to service sentinel")
+	}
+	if IsServiceSentinelNeeded(TaskTypeBestIPFission) {
+		t.Fatal("TaskTypeBestIPFission must not be routed to service sentinel")
 	}
 }
 
