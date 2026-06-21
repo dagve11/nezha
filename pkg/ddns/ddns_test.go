@@ -82,3 +82,60 @@ func TestProviderSetsMultipleAddressRecords(t *testing.T) {
 	require.Equal(t, netip.MustParseAddr("1.0.0.1"), first.IP)
 	require.Equal(t, netip.MustParseAddr("1.1.1.1"), second.IP)
 }
+
+type recordingRRSetReplacer struct {
+	existing []libdns.Record
+	deleted  []libdns.Record
+	appended []libdns.Record
+	set      []libdns.Record
+}
+
+func (s *recordingRRSetReplacer) GetRecords(_ context.Context, _ string) ([]libdns.Record, error) {
+	return s.existing, nil
+}
+
+func (s *recordingRRSetReplacer) DeleteRecords(_ context.Context, _ string, records []libdns.Record) ([]libdns.Record, error) {
+	s.deleted = append(s.deleted, records...)
+	return records, nil
+}
+
+func (s *recordingRRSetReplacer) AppendRecords(_ context.Context, _ string, records []libdns.Record) ([]libdns.Record, error) {
+	s.appended = append(s.appended, records...)
+	return records, nil
+}
+
+func (s *recordingRRSetReplacer) SetRecords(_ context.Context, _ string, records []libdns.Record) ([]libdns.Record, error) {
+	s.set = append(s.set, records...)
+	return records, nil
+}
+
+func TestProviderReplacesAddressRRSetBeforeAppendingMultipleRecords(t *testing.T) {
+	replacer := &recordingRRSetReplacer{
+		existing: []libdns.Record{
+			libdns.Address{Name: "cdn", IP: netip.MustParseAddr("8.8.8.8")},
+			libdns.Address{Name: "cdn", IP: netip.MustParseAddr("8.8.4.4")},
+			libdns.Address{Name: "other", IP: netip.MustParseAddr("9.9.9.9")},
+			libdns.Address{Name: "cdn", IP: netip.MustParseAddr("2001:4860:4860::8888")},
+		},
+	}
+	provider := &Provider{Setter: replacer}
+	provider.prefix = "cdn"
+	provider.zone = "example.com."
+
+	err := provider.addDomainRecords(context.Background(), "A", []string{"1.0.0.1", "1.1.1.1"})
+	require.NoError(t, err)
+
+	require.Empty(t, replacer.set)
+	require.Len(t, replacer.deleted, 2)
+	require.Len(t, replacer.appended, 2)
+
+	deletedFirst := replacer.deleted[0].(libdns.Address)
+	deletedSecond := replacer.deleted[1].(libdns.Address)
+	require.Equal(t, netip.MustParseAddr("8.8.8.8"), deletedFirst.IP)
+	require.Equal(t, netip.MustParseAddr("8.8.4.4"), deletedSecond.IP)
+
+	appendedFirst := replacer.appended[0].(libdns.Address)
+	appendedSecond := replacer.appended[1].(libdns.Address)
+	require.Equal(t, netip.MustParseAddr("1.0.0.1"), appendedFirst.IP)
+	require.Equal(t, netip.MustParseAddr("1.1.1.1"), appendedSecond.IP)
+}

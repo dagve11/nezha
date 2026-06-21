@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/libdns/libdns"
@@ -117,6 +118,12 @@ func (provider *Provider) addDomainRecords(ctx context.Context, recType string, 
 		})
 	}
 
+	if err := provider.replaceAddressRRSet(ctx, recType, records); err == nil {
+		return nil
+	} else if !isUnsupportedRRSetReplace(err) {
+		return err
+	}
+
 	_, err := provider.Setter.SetRecords(ctx, provider.zone, records)
 	return err
 }
@@ -129,6 +136,54 @@ func (provider *Provider) ipv4Addrs() []string {
 		return []string{provider.IPAddrs.IPv4Addr}
 	}
 	return nil
+}
+
+type addressRRSetReplacer interface {
+	libdns.RecordGetter
+	libdns.RecordDeleter
+	libdns.RecordAppender
+}
+
+var errUnsupportedRRSetReplace = fmt.Errorf("record setter does not support RRSet replacement")
+
+func isUnsupportedRRSetReplace(err error) bool {
+	return err == errUnsupportedRRSetReplace
+}
+
+func (provider *Provider) replaceAddressRRSet(ctx context.Context, recType string, records []libdns.Record) error {
+	replacer, ok := provider.Setter.(addressRRSetReplacer)
+	if !ok {
+		return errUnsupportedRRSetReplace
+	}
+
+	existingRecords, err := replacer.GetRecords(ctx, provider.zone)
+	if err != nil {
+		return err
+	}
+
+	recordsToDelete := make([]libdns.Record, 0)
+	for _, record := range existingRecords {
+		if sameRecordSet(record, provider.prefix, recType, provider.zone) {
+			recordsToDelete = append(recordsToDelete, record)
+		}
+	}
+	if len(recordsToDelete) > 0 {
+		if _, err := replacer.DeleteRecords(ctx, provider.zone, recordsToDelete); err != nil {
+			return err
+		}
+	}
+
+	_, err = replacer.AppendRecords(ctx, provider.zone, records)
+	return err
+}
+
+func sameRecordSet(record libdns.Record, name, recType, zone string) bool {
+	rr := record.RR()
+	return rr.Type == recType && normalizeRecordName(rr.Name, zone) == normalizeRecordName(name, zone)
+}
+
+func normalizeRecordName(name, zone string) string {
+	return strings.TrimSuffix(libdns.AbsoluteName(name, zone), ".")
 }
 
 func (provider *Provider) ipv6Addrs() []string {
