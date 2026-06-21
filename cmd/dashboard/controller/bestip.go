@@ -39,6 +39,11 @@ func runBestIPFission(c *gin.Context) (*model.BestIPFissionResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if singleton.BestIPAutomationShared != nil {
+		if _, err := singleton.BestIPAutomationShared.PersistManualFissionResult(getUid(c), form, result); err != nil {
+			return nil, err
+		}
+	}
 	return result, nil
 }
 
@@ -73,11 +78,33 @@ func streamBestIPFission(c *gin.Context) (any, error) {
 		return nil
 	}
 
-	_, err = bestIPFissionStreamRunner(ctx, getUid(c), form, func(event bestip.FissionProgressEvent) {
+	userID := getUid(c)
+	var doneEvent *bestip.FissionProgressEvent
+	result, err := bestIPFissionStreamRunner(ctx, userID, form, func(event bestip.FissionProgressEvent) {
+		if event.Type == bestip.FissionProgressDone {
+			eventCopy := event
+			doneEvent = &eventCopy
+			return
+		}
 		_ = writeEvent(event)
 	})
 	if err != nil {
 		_ = writeEvent(bestip.FissionProgressEvent{Type: bestip.FissionProgressError, Error: err.Error()})
+		return nil, newWsError("%v", err)
+	}
+	if singleton.BestIPAutomationShared != nil {
+		if _, err := singleton.BestIPAutomationShared.PersistManualFissionResult(userID, form, result); err != nil {
+			_ = writeEvent(bestip.FissionProgressEvent{Type: bestip.FissionProgressError, Error: err.Error()})
+			return nil, newWsError("%v", err)
+		}
+	}
+	if doneEvent == nil {
+		doneEvent = &bestip.FissionProgressEvent{Type: bestip.FissionProgressDone, Result: result}
+	}
+	if doneEvent.Result == nil {
+		doneEvent.Result = result
+	}
+	if err := writeEvent(*doneEvent); err != nil {
 		return nil, newWsError("%v", err)
 	}
 	if writeErr != nil {

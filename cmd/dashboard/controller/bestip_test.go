@@ -113,6 +113,9 @@ func TestRunBestIPFissionUsesRequestConfig(t *testing.T) {
 			Rounds: []bestip.FissionRoundResult{
 				{Round: 1, NewIPs: []string{"1.0.0.1"}, NewDomains: []string{"one.example.com"}, TotalIPs: 2, TotalDomains: 1},
 			},
+			Candidates: []bestip.CandidateResult{
+				{Family: "ipv4", IP: "1.0.0.1", Score: 0.98},
+			},
 		}, nil
 	}
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/bestip/fission", strings.NewReader(`{
@@ -130,6 +133,18 @@ func TestRunBestIPFissionUsesRequestConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"1.1.1.1", "1.0.0.1"}, result.IPs)
 	require.Len(t, result.Rounds, 1)
+
+	automation, ok := singleton.BestIPAutomationShared.GetByUser(200)
+	require.True(t, ok)
+	require.Len(t, automation.LastCandidates, 1)
+	require.Equal(t, "1.0.0.1", automation.LastCandidates[0].IP)
+
+	histories, err := singleton.BestIPAutomationShared.HistoriesForUser(200, 20)
+	require.NoError(t, err)
+	require.Len(t, histories, 1)
+	require.Equal(t, model.BestIPAutomationActionRun, histories[0].Action)
+	require.Len(t, histories[0].Candidates, 1)
+	require.Equal(t, "1.0.0.1", histories[0].Candidates[0].IP)
 }
 
 func TestStreamBestIPFissionWritesProgressEvents(t *testing.T) {
@@ -204,6 +219,18 @@ func TestStreamBestIPFissionWritesProgressEvents(t *testing.T) {
 	require.Equal(t, []string{"one.example.com"}, events[1].Domains)
 	require.Equal(t, bestip.FissionProgressDone, events[2].Type)
 	require.Equal(t, []string{"1.1.1.1", "1.0.0.1"}, events[2].Result.IPs)
+
+	automation, ok := singleton.BestIPAutomationShared.GetByUser(200)
+	require.True(t, ok)
+	require.Len(t, automation.LastCandidates, 1)
+	require.Equal(t, "1.0.0.1", automation.LastCandidates[0].IP)
+
+	histories, err := singleton.BestIPAutomationShared.HistoriesForUser(200, 20)
+	require.NoError(t, err)
+	require.Len(t, histories, 1)
+	require.Equal(t, model.BestIPAutomationActionRun, histories[0].Action)
+	require.Len(t, histories[0].Candidates, 1)
+	require.Equal(t, "1.0.0.1", histories[0].Candidates[0].IP)
 }
 
 func TestWriteBestIPDNSReturnsSynchronousResult(t *testing.T) {

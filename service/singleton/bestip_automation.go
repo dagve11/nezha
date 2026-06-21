@@ -186,6 +186,63 @@ func (c *BestIPAutomationClass) RunByID(ctx context.Context, id uint64) (*model.
 	return c.run(ctx, automation)
 }
 
+func (c *BestIPAutomationClass) PersistManualFissionResult(userID uint64, config bestip.FissionConfig, result *bestip.FissionRunResult) (*model.BestIPAutomationHistory, error) {
+	if result == nil {
+		return nil, Localizer.ErrorT("bestip fission returned empty result")
+	}
+	normalizedConfig, err := bestip.NormalizeFissionConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	if err := canUseBestIPProbeServer(userID, normalizedConfig.ProbeServerID); err != nil {
+		return nil, err
+	}
+
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+
+	automation, ok := c.GetByUser(userID)
+	if !ok {
+		automation = &model.BestIPAutomation{
+			Common:    model.Common{UserID: userID},
+			WriteTopN: 1,
+			Fission:   normalizedConfig,
+		}
+	}
+
+	now := time.Now()
+	automation.LastCandidates = result.Candidates
+	automation.LastRunAt = now
+	automation.LastResult = true
+	automation.LastError = ""
+
+	history := &model.BestIPAutomationHistory{
+		Common:       model.Common{UserID: userID},
+		AutomationID: automation.ID,
+		Action:       model.BestIPAutomationActionRun,
+		StartedAt:    now,
+		FinishedAt:   now,
+		Success:      true,
+		Candidates:   result.Candidates,
+	}
+
+	if automation.ID == 0 {
+		if err := DB.Create(automation).Error; err != nil {
+			return nil, err
+		}
+		history.AutomationID = automation.ID
+		if err := c.Update(automation); err != nil {
+			return nil, err
+		}
+	} else if err := DB.Save(automation).Error; err != nil {
+		return nil, err
+	}
+	if err := DB.Create(history).Error; err != nil {
+		return nil, err
+	}
+	return history, nil
+}
+
 func (c *BestIPAutomationClass) RollbackForUser(ctx context.Context, userID uint64) (*model.BestIPAutomationHistory, error) {
 	automation, ok := c.GetByUser(userID)
 	if !ok {

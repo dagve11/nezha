@@ -104,6 +104,55 @@ func TestWriteBestIPDNSUsesDDNSCredentialsWithOverrideDomains(t *testing.T) {
 	require.True(t, results[0].Success)
 }
 
+func TestPersistManualFissionResultStoresCandidatesWithoutDNSWriteback(t *testing.T) {
+	automation := setupBestIPAutomationFixture(t)
+	saved, err := automation.SaveForUser(200, model.BestIPAutomationForm{
+		AutoWriteDNS:    true,
+		WriteTopN:       1,
+		DDNSCredentials: []uint64{8},
+		Domains:         []string{"cdn.example.com"},
+		Fission: bestip.FissionConfig{
+			SeedIPs:        []string{"1.1.1.1"},
+			Rounds:         1,
+			Concurrency:    1,
+			TimeoutMS:      1000,
+			MaxDomains:     10,
+			MaxIPsPerRound: 10,
+			Families:       []string{"ipv4"},
+		},
+	})
+	require.NoError(t, err)
+
+	history, err := automation.PersistManualFissionResult(200, bestip.FissionConfig{
+		SeedIPs:        []string{"8.8.8.8"},
+		Rounds:         1,
+		Concurrency:    1,
+		TimeoutMS:      1000,
+		MaxDomains:     10,
+		MaxIPsPerRound: 10,
+		Families:       []string{"ipv4"},
+	}, &bestip.FissionRunResult{
+		IPs: []string{"8.8.8.8", "8.8.4.4"},
+		Candidates: []bestip.CandidateResult{
+			{Family: "ipv4", IP: "8.8.4.4", Score: 0.99},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, saved.ID, history.AutomationID)
+	require.Equal(t, model.BestIPAutomationActionRun, history.Action)
+	require.Len(t, history.Candidates, 1)
+	require.Empty(t, history.DNSResults)
+
+	reloaded, ok := automation.GetByUser(200)
+	require.True(t, ok)
+	require.Equal(t, []string{"1.1.1.1"}, reloaded.Fission.SeedIPs)
+	require.Len(t, reloaded.LastCandidates, 1)
+	require.Equal(t, "8.8.4.4", reloaded.LastCandidates[0].IP)
+	require.Empty(t, reloaded.LastDNSResults)
+	require.Empty(t, reloaded.LastIPv4Records)
+	require.Empty(t, reloaded.LastIPv6Records)
+}
+
 func TestBestIPAutomationRunWritesTopCandidateStoresRollbackPointAndNotifies(t *testing.T) {
 	automation := setupBestIPAutomationFixture(t)
 	sentNotifications := []string{}
