@@ -6379,6 +6379,64 @@ func TestVPNOnAgentReconnectAutoRestartsLostSessionWhenPolicyAllows(t *testing.T
 	assertNoTask(t, h.entryStream)
 }
 
+func TestVPNOnAgentReconnectAutoRestartsStaleRestartingRecovery(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "auto restart stale recovery",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+		AutoRestart:         true,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	session := createStaleRestartingRecoverySession(t, actor, policy, "vpn_stale_restarting_reconnect")
+	if err := DB.Create(session).Error; err != nil {
+		t.Fatal(err)
+	}
+	*h.notifications = nil
+
+	if err := h.vpn.OnAgentReconnect(policy.EntryServerID); err != nil {
+		t.Fatalf("agent reconnect: %v", err)
+	}
+
+	var stored model.AgentVPNSession
+	if err := DB.First(&stored, session.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != model.VPNStateStarting || stored.EntryState != model.VPNStatePending || stored.ExitState != model.VPNStateStarting {
+		t.Fatalf("stale recovery reconnect must stage restart, got state=%q entry=%q exit=%q", stored.State, stored.EntryState, stored.ExitState)
+	}
+	if stored.RecoveryState != model.VPNRecoveryStateIdle {
+		t.Fatalf("stale recovery reconnect must clear recovery state before restart, got %q", stored.RecoveryState)
+	}
+	if stored.EntryStreamID == "old-entry-stream" || stored.ExitStreamID == "old-exit-stream" {
+		t.Fatalf("stale recovery reconnect must rotate streams, got entry=%q exit=%q", stored.EntryStreamID, stored.ExitStreamID)
+	}
+	if stored.TokenHash == hashVPNToken("stale-token") {
+		t.Fatal("stale recovery reconnect must rotate token")
+	}
+	_, entryStop := readVPNTask(t, h.entryStream)
+	if entryStop.Action != model.VPNActionStop || entryStop.Role != model.VPNRoleEntry {
+		t.Fatalf("stale recovery reconnect must cleanup entry before restart, got %+v", entryStop)
+	}
+	_, exitStop := readVPNTask(t, h.exitStream)
+	if exitStop.Action != model.VPNActionStop || exitStop.Role != model.VPNRoleExit {
+		t.Fatalf("stale recovery reconnect must cleanup exit before restart, got %+v", exitStop)
+	}
+	_, exitStart := readVPNTask(t, h.exitStream)
+	if exitStart.Action != model.VPNActionStart || exitStart.Role != model.VPNRoleExit || exitStart.SessionID != session.SessionID {
+		t.Fatalf("stale recovery reconnect must dispatch fresh exit start, got %+v", exitStart)
+	}
+	assertNoTask(t, h.entryStream)
+}
+
 func TestVPNOnAgentReconnectAutoRestartExitDispatchFailureCleansRuntime(t *testing.T) {
 	h := newVPNHarness(t)
 	actor := VPNActor{UserID: 100, Role: model.RoleMember}
@@ -6958,6 +7016,69 @@ func TestVPNCheckActiveSessionStatusesQueriesRunningSessions(t *testing.T) {
 	}
 }
 
+func TestVPNCheckActiveSessionStatusesMarksStaleRestartingRecoveryLost(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy, err := h.vpn.SavePolicy(actor, model.AgentVPNPolicyForm{
+		Name:                "stale recovery health check",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+		AutoRestart:         true,
+	})
+	if err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	session := createStaleRestartingRecoverySession(t, actor, policy, "vpn_stale_restarting_health")
+	if err := DB.Create(session).Error; err != nil {
+		t.Fatal(err)
+	}
+	*h.notifications = nil
+
+	if err := h.vpn.CheckActiveSessionStatuses(); err != nil {
+		t.Fatalf("check active session statuses: %v", err)
+	}
+
+	var stored model.AgentVPNSession
+	if err := DB.First(&stored, session.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != model.VPNStateLost || stored.EntryState != model.VPNStateLost || stored.ExitState != model.VPNStateLost {
+		t.Fatalf("stale recovery must be marked lost, got state=%q entry=%q exit=%q", stored.State, stored.EntryState, stored.ExitState)
+	}
+	if stored.RecoveryState != model.VPNRecoveryStateIdle || stored.RecoveryAttempt != 0 || stored.RecoveryStartedAt != nil || stored.RecoveryNextAt != nil {
+		t.Fatalf("stale recovery must reset recovery fields, state=%q attempt=%d started=%v next=%v", stored.RecoveryState, stored.RecoveryAttempt, stored.RecoveryStartedAt, stored.RecoveryNextAt)
+	}
+	if !strings.Contains(stored.LastError, "VPN recovery restart timed out") || !strings.Contains(stored.LastError, "heartbeat timeout") {
+		t.Fatalf("stale recovery lost reason must include timeout and original error, got %q", stored.LastError)
+	}
+	_, entryStop := readVPNTask(t, h.entryStream)
+	if entryStop.Action != model.VPNActionStop || entryStop.Role != model.VPNRoleEntry {
+		t.Fatalf("stale recovery health check must cleanup entry, got %+v", entryStop)
+	}
+	_, exitStop := readVPNTask(t, h.exitStream)
+	if exitStop.Action != model.VPNActionStop || exitStop.Role != model.VPNRoleExit {
+		t.Fatalf("stale recovery health check must cleanup exit, got %+v", exitStop)
+	}
+	if len(*h.relayCloses) == 0 || (*h.relayCloses)[len(*h.relayCloses)-1] != session.SessionID {
+		t.Fatalf("stale recovery health check must close relay, got %#v", *h.relayCloses)
+	}
+	if len(*h.notifications) != 1 || !strings.Contains((*h.notifications)[0].message, "已失联") {
+		t.Fatalf("stale recovery health check must notify lost once, got %#v", *h.notifications)
+	}
+	var audit model.AgentVPNAuditLog
+	if err := DB.Where("action = ? AND session_id = ? AND success = ?", model.VPNAuditActionStatus, session.SessionID, false).Last(&audit).Error; err != nil {
+		t.Fatalf("stale recovery health check must write audit: %v", err)
+	}
+	if audit.Detail["self_recovery"] != "restart_timeout" || audit.Detail["source"] != "dashboard health check" {
+		t.Fatalf("stale recovery audit detail mismatch: %#v", audit.Detail)
+	}
+}
+
 func TestStartVPNLifecycleJobsRecoversActiveSessionsAndSchedulesExpiry(t *testing.T) {
 	h := newVPNHarness(t)
 	originalCronShared := CronShared
@@ -7013,6 +7134,40 @@ func createTestVPNPolicy(t *testing.T, h *vpnHarness, actor VPNActor) *model.Age
 		t.Fatalf("save policy: %v", err)
 	}
 	return policy
+}
+
+func createStaleRestartingRecoverySession(t *testing.T, actor VPNActor, policy *model.AgentVPNPolicy, sessionID string) *model.AgentVPNSession {
+	t.Helper()
+	startedAt := time.Now().Add(-defaultVPNRecoveryRestartTimeout - 5*time.Second)
+	recoveryStartedAt := startedAt.Add(-time.Minute)
+	return &model.AgentVPNSession{
+		Common:            model.Common{UserID: actor.UserID},
+		PolicyID:          policy.ID,
+		EntryServerID:     policy.EntryServerID,
+		ExitServerID:      policy.ExitServerID,
+		SessionID:         sessionID,
+		RuntimeInstanceID: "old-runtime",
+		TokenHash:         hashVPNToken("stale-token"),
+		Mode:              policy.Mode,
+		RuleMode:          policy.RuleMode,
+		RelayMode:         model.VPNRelayModeDashboard,
+		State:             model.VPNStateStarting,
+		EntryState:        model.VPNStateStarting,
+		ExitState:         model.VPNStateRunning,
+		EntryStreamID:     "old-entry-stream",
+		ExitStreamID:      "old-exit-stream",
+		LastError:         "bridge closed",
+		RecoveryState:     model.VPNRecoveryStateRestarting,
+		RecoveryAttempt:   1,
+		RecoveryStartedAt: &recoveryStartedAt,
+		RecoveryLastError: "heartbeat timeout",
+		RecoveryReason:    model.VPNFailureReasonHeartbeatTimeout,
+		StartedAt:         startedAt,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		LocalSOCKS:        policy.ListenSOCKS,
+		SetSystemProxy:    policy.SetSystemProxy,
+		ActiveConnections: 1,
+	}
 }
 
 func assertVPNCoreSpec(t *testing.T, spec model.VPNCoreSpec) {

@@ -45,6 +45,7 @@ var (
 )
 
 const defaultVPNRelayTrafficFlushInterval = 2 * time.Second
+const defaultVPNRecoveryRestartTimeout = 90 * time.Second
 const vpnPolicyStatusCheckTimeout = 5 * time.Second
 const vpnAgentDebugResultLimit = 30
 const vpnSessionLogLimit = 50
@@ -132,6 +133,36 @@ func resetVPNSessionRecovery(session *model.AgentVPNSession) {
 	session.RecoveryReason = ""
 }
 
+func isVPNRecoveryRestartStale(session *model.AgentVPNSession, now time.Time) bool {
+	if session == nil || session.RecoveryState != model.VPNRecoveryStateRestarting {
+		return false
+	}
+	if session.State == model.VPNStateRunning || isVPNTerminalState(session.State) {
+		return false
+	}
+	if session.EntryState == model.VPNStateRunning && session.ExitState == model.VPNStateRunning {
+		return false
+	}
+	reference := vpnRecoveryRestartReferenceTime(session)
+	if reference.IsZero() {
+		return false
+	}
+	return !now.Before(reference.Add(defaultVPNRecoveryRestartTimeout))
+}
+
+func vpnRecoveryRestartReferenceTime(session *model.AgentVPNSession) time.Time {
+	if session == nil {
+		return time.Time{}
+	}
+	if !session.StartedAt.IsZero() {
+		return session.StartedAt
+	}
+	if !session.UpdatedAt.IsZero() {
+		return session.UpdatedAt
+	}
+	return session.CreatedAt
+}
+
 func StartVPNLifecycleJobs() error {
 	if VPNShared == nil {
 		return errors.New("vpn service is not initialized")
@@ -174,12 +205,28 @@ func NewVPNClass() *VPNClass {
 
 func (v *VPNClass) RecoverScheduledSelfRecoveries() error {
 	var sessions []model.AgentVPNSession
-	if err := DB.Where("recovery_state = ?", model.VPNRecoveryStateScheduled).Find(&sessions).Error; err != nil {
+	if err := DB.Where("recovery_state IN ?", []string{model.VPNRecoveryStateScheduled, model.VPNRecoveryStateRestarting}).Find(&sessions).Error; err != nil {
 		return err
 	}
 	now := time.Now()
 	for i := range sessions {
 		session := &sessions[i]
+		if session.RecoveryState == model.VPNRecoveryStateRestarting {
+			if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
+				_ = v.expireSession(session, now)
+				continue
+			}
+			policy, err := v.policyForSession(session)
+			if err != nil {
+				policy = v.fallbackVPNPolicyForLostSession(session)
+			}
+			if settled, err := v.settleStaleVPNRecoveryRestart(session, policy, now, "dashboard recovery"); err != nil {
+				return err
+			} else if settled {
+				continue
+			}
+			continue
+		}
 		if session.RecoveryNextAt == nil {
 			resetVPNSessionRecovery(session)
 			_ = DB.Save(session).Error
@@ -1940,7 +1987,7 @@ func (v *VPNClass) RecoverActiveSessions() error {
 
 func (v *VPNClass) CheckActiveSessionStatuses() error {
 	var sessions []model.AgentVPNSession
-	if err := DB.Where("state IN ?", []string{model.VPNStateRunning, model.VPNStateUnknown}).Find(&sessions).Error; err != nil {
+	if err := DB.Where("(state IN ? OR recovery_state = ?)", []string{model.VPNStateRunning, model.VPNStateUnknown}, model.VPNRecoveryStateRestarting).Find(&sessions).Error; err != nil {
 		return err
 	}
 	now := time.Now()
@@ -1953,6 +2000,14 @@ func (v *VPNClass) CheckActiveSessionStatuses() error {
 		if err != nil {
 			reason := "policy not found during health check: " + err.Error()
 			_ = v.markSessionLost(session, v.fallbackVPNPolicyForLostSession(session), model.VPNRoleEntry, reason, "dashboard health check")
+			continue
+		}
+		if settled, err := v.settleStaleVPNRecoveryRestart(session, policy, now, "dashboard health check"); err != nil {
+			return err
+		} else if settled {
+			continue
+		}
+		if session.State != model.VPNStateRunning && session.State != model.VPNStateUnknown {
 			continue
 		}
 		if err := v.querySessionStatus(session, policy, session.EntryServerID, model.VPNRoleEntry); err != nil {
@@ -1998,6 +2053,21 @@ func (v *VPNClass) OnAgentReconnect(serverID uint64) error {
 				session.State = model.VPNStateLost
 				session.LastError = err.Error()
 				_ = DB.Save(session).Error
+			}
+			continue
+		}
+		if settled, err := v.settleStaleVPNRecoveryRestart(session, policy, now, "agent reconnect"); err != nil {
+			return err
+		} else if settled {
+			if shouldAutoRestartVPNSession(policy, session, now) {
+				if err := v.restartExistingSession(session, policy); err != nil {
+					role := vpnRoleFromError(err, model.VPNRoleEntry)
+					if isVPNUnavailableFault(err) {
+						_ = v.markSessionFailed(session, policy, role, err.Error(), "auto restart")
+					} else {
+						_ = v.markSessionLost(session, policy, role, err.Error(), "auto restart")
+					}
+				}
 			}
 			continue
 		}
@@ -2757,6 +2827,9 @@ func (v *VPNClass) markSessionLost(session *model.AgentVPNSession, policy *model
 	if vpnLostAlreadyRecorded(session, role, reason, source) {
 		return nil
 	}
+	if session.RecoveryState == model.VPNRecoveryStateRestarting {
+		resetVPNSessionRecovery(session)
+	}
 	if role == model.VPNRoleEntry {
 		session.EntryState = model.VPNStateLost
 	} else if role == model.VPNRoleExit {
@@ -2777,6 +2850,61 @@ func (v *VPNClass) markSessionLost(session *model.AgentVPNSession, policy *model
 		v.notifyLost(policy, session, role, reason)
 	}
 	return nil
+}
+
+func (v *VPNClass) settleStaleVPNRecoveryRestart(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, now time.Time, source string) (bool, error) {
+	if !isVPNRecoveryRestartStale(session, now) {
+		return false, nil
+	}
+	reference := vpnRecoveryRestartReferenceTime(session)
+	waitSeconds := int64(0)
+	if !reference.IsZero() && now.After(reference) {
+		waitSeconds = int64(now.Sub(reference).Seconds())
+	}
+	role := model.VPNRoleEntry
+	if session.EntryState == model.VPNStateRunning && session.ExitState != model.VPNStateRunning {
+		role = model.VPNRoleExit
+	}
+	recoveryAttempt := session.RecoveryAttempt
+	recoveryReason := firstNonEmptyString(session.RecoveryReason, model.VPNFailureReasonUnknown)
+	recoveryLastError := firstNonEmptyString(session.RecoveryLastError, session.LastError, "recovery restart did not complete")
+	reason := fmt.Sprintf("VPN recovery restart timed out after %s", defaultVPNRecoveryRestartTimeout)
+	if recoveryLastError != "" {
+		reason += ": " + recoveryLastError
+	}
+
+	cleanupErrors := v.dispatchSessionCleanupStops(session, policy)
+	session.State = model.VPNStateLost
+	session.EntryState = model.VPNStateLost
+	session.ExitState = model.VPNStateLost
+	session.LastError = reason
+	if len(cleanupErrors) > 0 {
+		session.LastError += "; cleanup dispatch failed: " + strings.Join(cleanupErrors, "; ")
+	}
+	resetVPNSessionRecovery(session)
+	if err := DB.Save(session).Error; err != nil {
+		return true, err
+	}
+	v.finalizeVPNSessionRuntime(session.SessionID)
+	v.appendControlLog(session.SessionID, "runtime self recovery restart timed out after %ds; session marked lost", waitSeconds)
+	detail := map[string]string{
+		"role":                  role,
+		"source":                source,
+		"reason":                session.LastError,
+		"self_recovery":         "restart_timeout",
+		"self_recovery_attempt": fmt.Sprint(recoveryAttempt),
+		"failure_reason":        recoveryReason,
+		"wait_seconds":          fmt.Sprint(waitSeconds),
+		"cleanup_dispatched":    "true",
+	}
+	if len(cleanupErrors) > 0 {
+		detail["cleanup_errors"] = strings.Join(cleanupErrors, "; ")
+	}
+	_ = v.writeAudit(VPNActor{UserID: session.GetUserID(), Role: model.RoleAdmin}, model.VPNAuditActionStatus, session.SessionID, session.EntryServerID, session.ExitServerID, false, session.LastError, detail)
+	if policy != nil {
+		v.notifyLost(policy, session, role, session.LastError)
+	}
+	return true, nil
 }
 
 func (v *VPNClass) markSessionFailed(session *model.AgentVPNSession, policy *model.AgentVPNPolicy, role string, reason string, source string) error {
