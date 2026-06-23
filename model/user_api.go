@@ -1,9 +1,17 @@
 package model
 
 type UserForm struct {
-	Role     Role   `json:"role,omitempty"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty" gorm:"type:char(72)"`
+	Role        Role             `json:"role,omitempty"`
+	Username    string           `json:"username,omitempty"`
+	Password    string           `json:"password,omitempty" gorm:"type:char(72)"`
+	Permissions *UserPermissions `json:"permissions,omitempty"`
+}
+
+type UserUpdateForm struct {
+	Role        Role             `json:"role,omitempty"`
+	Username    string           `json:"username,omitempty"`
+	Password    string           `json:"password,omitempty"`
+	Permissions *UserPermissions `json:"permissions,omitempty"`
 }
 
 type ProfileForm struct {

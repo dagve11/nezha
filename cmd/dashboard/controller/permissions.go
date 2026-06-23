@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/nezhahq/nezha/model"
@@ -17,6 +19,24 @@ func callerIsAdmin(c *gin.Context) bool {
 		return false
 	}
 	return user.Role.IsAdmin()
+}
+
+func userFeatureMiddleware(feature model.UserFeature) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		auth, ok := c.Get(model.CtxKeyAuthorizedUser)
+		if !ok {
+			c.JSON(http.StatusOK, newErrorResponse(singleton.Localizer.ErrorT("unauthorized")))
+			c.Abort()
+			return
+		}
+		user, ok := auth.(*model.User)
+		if !ok || user == nil || !user.HasFeature(feature) {
+			c.JSON(http.StatusOK, newErrorResponse(singleton.Localizer.ErrorT("permission denied")))
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
 }
 
 func userCanViewServer(c *gin.Context, server *model.Server) bool {

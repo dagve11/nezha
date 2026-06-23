@@ -26,8 +26,10 @@ func getProfile(c *gin.Context) (*model.Profile, error) {
 	if !ok {
 		return nil, singleton.Localizer.ErrorT("unauthorized")
 	}
+	user := *auth.(*model.User)
+	normalizeUserPermissions(&user)
 	var ob []model.Oauth2Bind
-	if err := singleton.DB.Where("user_id = ?", auth.(*model.User).ID).Find(&ob).Error; err != nil {
+	if err := singleton.DB.Where("user_id = ?", user.ID).Find(&ob).Error; err != nil {
 		return nil, newGormError("%v", err)
 	}
 	var obMap = make(map[string]string)
@@ -35,7 +37,7 @@ func getProfile(c *gin.Context) (*model.Profile, error) {
 		obMap[v.Provider] = v.OpenID
 	}
 	return &model.Profile{
-		User:       *auth.(*model.User),
+		User:       user,
 		LoginIP:    c.GetString(model.CtxKeyRealIPStr),
 		Oauth2Bind: obMap,
 	}, nil
@@ -111,6 +113,9 @@ func listUser(c *gin.Context) ([]model.User, error) {
 	if err := singleton.DB.Omit("password").Find(&users).Error; err != nil {
 		return nil, err
 	}
+	for i := range users {
+		normalizeUserPermissions(&users[i])
+	}
 	return users, nil
 }
 
@@ -144,6 +149,7 @@ func createUser(c *gin.Context) (uint64, error) {
 	var u model.User
 	u.Username = uf.Username
 	u.Role = uf.Role
+	u.Permissions = permissionsFromForm(uf.Role, uf.Permissions)
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(uf.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -157,6 +163,73 @@ func createUser(c *gin.Context) (uint64, error) {
 
 	singleton.OnUserUpdate(&u)
 	return u.ID, nil
+}
+
+// Update user
+// @Summary Update user
+// @Security BearerAuth
+// @Schemes
+// @Description Update user
+// @Tags admin required
+// @Accept json
+// @param id path uint true "User ID"
+// @param request body model.UserUpdateForm true "User Request"
+// @Produce json
+// @Success 200 {object} model.CommonResponse[any]
+// @Router /user/{id} [patch]
+func updateUser(c *gin.Context) (any, error) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	var uf model.UserUpdateForm
+	if err := c.ShouldBindJSON(&uf); err != nil {
+		return nil, err
+	}
+	if uf.Username == "" {
+		return nil, singleton.Localizer.ErrorT("username can't be empty")
+	}
+	if uf.Role > model.RoleMember {
+		return nil, singleton.Localizer.ErrorT("invalid role")
+	}
+	if uf.Password != "" && len(uf.Password) < 6 {
+		return nil, singleton.Localizer.ErrorT("password length must be greater than 6")
+	}
+
+	auth := c.MustGet(model.CtxKeyAuthorizedUser).(*model.User)
+	if auth.ID == id && auth.Role != uf.Role {
+		return nil, singleton.Localizer.ErrorT("can't change your own role")
+	}
+
+	var u model.User
+	if err := singleton.DB.First(&u, id).Error; err != nil {
+		return nil, singleton.Localizer.ErrorT("user id %d does not exist", id)
+	}
+
+	u.Username = uf.Username
+	u.Role = uf.Role
+	u.Permissions = permissionsFromForm(uf.Role, uf.Permissions)
+	if uf.Password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(uf.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, err
+		}
+		u.Password = string(hash)
+		u.TokenVersion += 1
+	}
+
+	if err := singleton.DB.Save(&u).Error; err != nil {
+		return nil, newGormError("%v", err)
+	}
+
+	singleton.OnUserUpdate(&u)
+	if uf.Password != "" {
+		if err := singleton.RevokeJWTSessionsByUser(u.ID); err != nil {
+			return nil, newGormError("%v", err)
+		}
+	}
+	return nil, nil
 }
 
 // Batch delete users
@@ -256,4 +329,23 @@ func batchBlockOnlineUser(c *gin.Context) (any, error) {
 	}
 
 	return nil, nil
+}
+
+func permissionsFromForm(role model.Role, permissions *model.UserPermissions) model.UserPermissions {
+	if role.IsAdmin() {
+		return model.DefaultUserPermissions(role)
+	}
+	if permissions == nil {
+		return model.DefaultUserPermissions(role)
+	}
+	return *permissions
+}
+
+func normalizeUserPermissions(user *model.User) {
+	if user == nil {
+		return
+	}
+	if user.Role.IsAdmin() {
+		user.Permissions = model.DefaultUserPermissions(user.Role)
+	}
 }

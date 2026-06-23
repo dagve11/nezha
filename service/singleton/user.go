@@ -27,6 +27,7 @@ func initUser() {
 	UserInfoMap[0] = model.UserInfo{
 		Role:        model.RoleAdmin,
 		AgentSecret: Conf.AgentSecretKey,
+		Permissions: model.DefaultUserPermissions(model.RoleAdmin),
 	}
 	AgentSecretToUserId[Conf.AgentSecretKey] = 0
 
@@ -42,6 +43,7 @@ func initUser() {
 			Role:        u.Role,
 			Username:    u.Username,
 			AgentSecret: u.AgentSecret,
+			Permissions: u.Permissions,
 		}
 		AgentSecretToUserId[u.AgentSecret] = u.ID
 	}
@@ -82,6 +84,7 @@ func OnUserUpdate(u *model.User) {
 		Role:        u.Role,
 		Username:    u.Username,
 		AgentSecret: u.AgentSecret,
+		Permissions: u.Permissions,
 	}
 	AgentSecretToUserId[u.AgentSecret] = u.ID
 }
