@@ -12,7 +12,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"github.com/nezhahq/nezha/cmd/dashboard/controller/waf"
 	"github.com/nezhahq/nezha/model"
 	"github.com/nezhahq/nezha/pkg/idcodec"
 	"github.com/nezhahq/nezha/pkg/utils"
@@ -290,12 +289,6 @@ func fallbackAuthMiddleware(mw *jwt.GinJWTMiddleware) func(c *gin.Context) {
 		if identity != nil {
 			model.UnblockIP(singleton.DB, realIP, model.BlockIDToken)
 			c.Set(mw.IdentityKey, identity)
-		} else {
-			isIpMismatch := c.GetBool(model.CtxKeyIsIPMismatch)
-			if !isIpMismatch {
-				waf.ShowBlockPage(c, model.BlockIP(singleton.DB, realIP, model.WAFBlockReasonTypeBruteForceToken, model.BlockIDToken))
-				return
-			}
 		}
 
 		c.Next()
