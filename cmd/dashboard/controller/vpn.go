@@ -147,7 +147,11 @@ func listVPNSession(c *gin.Context) ([]*model.AgentVPNSession, error) {
 	if err := singleton.DB.Order("id DESC").Find(&sessions).Error; err != nil {
 		return nil, newGormError("%v", err)
 	}
-	return filterVPNSessions(c, sessions), nil
+	sessions = filterVPNSessions(c, sessions)
+	if singleton.VPNShared != nil {
+		singleton.VPNShared.DecorateSessionsDiagnostics(sessions)
+	}
+	return sessions, nil
 }
 
 func startVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
@@ -155,12 +159,12 @@ func startVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	if err := c.ShouldBindJSON(&form); err != nil {
 		return nil, err
 	}
-	return singleton.VPNShared.StartSession(vpnActorFromContext(c), form.PolicyID)
+	return decorateVPNSessionResponse(singleton.VPNShared.StartSession(vpnActorFromContext(c), form.PolicyID))
 }
 
 func stopVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	sessionID := vpnSessionIDParam(c)
-	return singleton.VPNShared.StopSession(vpnActorFromContext(c), sessionID)
+	return decorateVPNSessionResponse(singleton.VPNShared.StopSession(vpnActorFromContext(c), sessionID))
 }
 
 func deleteVPNSession(c *gin.Context) (any, error) {
@@ -173,12 +177,12 @@ func deleteVPNSession(c *gin.Context) (any, error) {
 
 func restartVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	sessionID := vpnSessionIDParam(c)
-	return singleton.VPNShared.RestartSession(vpnActorFromContext(c), sessionID)
+	return decorateVPNSessionResponse(singleton.VPNShared.RestartSession(vpnActorFromContext(c), sessionID))
 }
 
 func statusVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	sessionID := vpnSessionIDParam(c)
-	return singleton.VPNShared.RefreshSessionStatus(vpnActorFromContext(c), sessionID)
+	return decorateVPNSessionResponse(singleton.VPNShared.RefreshSessionStatus(vpnActorFromContext(c), sessionID))
 }
 
 func controlVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
@@ -187,7 +191,7 @@ func controlVPNSession(c *gin.Context) (*model.AgentVPNSession, error) {
 	if err := c.ShouldBindJSON(&form); err != nil {
 		return nil, err
 	}
-	return singleton.VPNShared.ControlSession(vpnActorFromContext(c), sessionID, form)
+	return decorateVPNSessionResponse(singleton.VPNShared.ControlSession(vpnActorFromContext(c), sessionID, form))
 }
 
 func vpnSessionStream(c *gin.Context) (any, error) {
@@ -410,5 +414,15 @@ func vpnSessionFrameFromSession(session *model.AgentVPNSession) vpnSessionStream
 	if len(frame.Logs) == 0 && strings.TrimSpace(session.LastError) != "" {
 		frame.Logs = []string{session.LastError}
 	}
+	if singleton.VPNShared != nil {
+		session.Diagnostics = singleton.VPNDiagnosticsForSession(session, frame.Logs)
+	}
 	return frame
+}
+
+func decorateVPNSessionResponse(session *model.AgentVPNSession, err error) (*model.AgentVPNSession, error) {
+	if session != nil && singleton.VPNShared != nil {
+		singleton.VPNShared.DecorateSessionDiagnostics(session)
+	}
+	return session, err
 }

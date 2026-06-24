@@ -341,53 +341,61 @@ func (p *AgentVPNPolicy) AfterFind(tx *gorm.DB) error {
 
 type AgentVPNSession struct {
 	Common
-	PolicyID            uint64     `json:"policy_id" gorm:"index"`
-	EntryServerID       uint64     `json:"entry_server_id" gorm:"index"`
-	ExitServerID        uint64     `json:"exit_server_id" gorm:"index"`
-	SessionID           string     `json:"session_id" gorm:"uniqueIndex"`
-	RuntimeInstanceID   string     `json:"runtime_instance_id" gorm:"index"`
-	TokenHash           string     `json:"-" gorm:"type:char(71)"`
-	Mode                string     `json:"mode"`
-	RuleMode            string     `json:"rule_mode"`
-	RelayMode           string     `json:"relay_mode"`
-	State               string     `json:"state" gorm:"index"`
-	EntryState          string     `json:"entry_state"`
-	ExitState           string     `json:"exit_state"`
-	EntryStreamID       string     `json:"entry_stream_id"`
-	ExitStreamID        string     `json:"exit_stream_id"`
-	RuntimeStatus       string     `json:"runtime_status"`
-	ModeStatus          string     `json:"mode_status"`
-	RuleModeStatus      string     `json:"rule_mode_status"`
-	CoreStatus          string     `json:"core_status"`
-	CorePath            string     `json:"core_path"`
-	CoreVersion         string     `json:"core_version"`
-	RulesStatus         string     `json:"rules_status"`
-	RulesPath           string     `json:"rules_path"`
-	RulesVersion        string     `json:"rules_version"`
-	LocalHTTP           string     `json:"local_http"`
-	LocalSOCKS          string     `json:"local_socks"`
-	TunName             string     `json:"tun_name"`
-	SetSystemProxy      bool       `json:"set_system_proxy"`
-	SystemProxyApplied  *bool      `json:"system_proxy_applied,omitempty"`
-	SystemProxyStatus   string     `json:"system_proxy_status"`
-	SystemProxyCurrent  string     `json:"system_proxy_current"`
-	SystemProxyExpected string     `json:"system_proxy_expected"`
-	TunStatus           string     `json:"tun_status"`
-	TunInterface        string     `json:"tun_interface"`
-	ControlOverride     bool       `json:"control_override"`
-	UploadBytes         uint64     `json:"upload_bytes"`
-	DownloadBytes       uint64     `json:"download_bytes"`
-	ActiveConnections   uint32     `json:"active_connections"`
-	LastError           string     `json:"last_error"`
-	RecoveryState       string     `json:"recovery_state"`
-	RecoveryAttempt     uint32     `json:"recovery_attempt"`
-	RecoveryStartedAt   *time.Time `json:"recovery_started_at,omitempty"`
-	RecoveryNextAt      *time.Time `json:"recovery_next_at,omitempty"`
-	RecoveryLastError   string     `json:"recovery_last_error"`
-	RecoveryReason      string     `json:"recovery_reason"`
-	StartedAt           time.Time  `json:"started_at"`
-	ExpiresAt           time.Time  `json:"expires_at"`
-	StoppedAt           *time.Time `json:"stopped_at,omitempty"`
+	PolicyID            uint64          `json:"policy_id" gorm:"index"`
+	EntryServerID       uint64          `json:"entry_server_id" gorm:"index"`
+	ExitServerID        uint64          `json:"exit_server_id" gorm:"index"`
+	SessionID           string          `json:"session_id" gorm:"uniqueIndex"`
+	RuntimeInstanceID   string          `json:"runtime_instance_id" gorm:"index"`
+	TokenHash           string          `json:"-" gorm:"type:char(71)"`
+	Mode                string          `json:"mode"`
+	RuleMode            string          `json:"rule_mode"`
+	RelayMode           string          `json:"relay_mode"`
+	State               string          `json:"state" gorm:"index"`
+	EntryState          string          `json:"entry_state"`
+	ExitState           string          `json:"exit_state"`
+	EntryStreamID       string          `json:"entry_stream_id"`
+	ExitStreamID        string          `json:"exit_stream_id"`
+	RuntimeStatus       string          `json:"runtime_status"`
+	ModeStatus          string          `json:"mode_status"`
+	RuleModeStatus      string          `json:"rule_mode_status"`
+	CoreStatus          string          `json:"core_status"`
+	CorePath            string          `json:"core_path"`
+	CoreVersion         string          `json:"core_version"`
+	RulesStatus         string          `json:"rules_status"`
+	RulesPath           string          `json:"rules_path"`
+	RulesVersion        string          `json:"rules_version"`
+	LocalHTTP           string          `json:"local_http"`
+	LocalSOCKS          string          `json:"local_socks"`
+	TunName             string          `json:"tun_name"`
+	SetSystemProxy      bool            `json:"set_system_proxy"`
+	SystemProxyApplied  *bool           `json:"system_proxy_applied,omitempty"`
+	SystemProxyStatus   string          `json:"system_proxy_status"`
+	SystemProxyCurrent  string          `json:"system_proxy_current"`
+	SystemProxyExpected string          `json:"system_proxy_expected"`
+	TunStatus           string          `json:"tun_status"`
+	TunInterface        string          `json:"tun_interface"`
+	ControlOverride     bool            `json:"control_override"`
+	UploadBytes         uint64          `json:"upload_bytes"`
+	DownloadBytes       uint64          `json:"download_bytes"`
+	ActiveConnections   uint32          `json:"active_connections"`
+	LastError           string          `json:"last_error"`
+	RecoveryState       string          `json:"recovery_state"`
+	RecoveryAttempt     uint32          `json:"recovery_attempt"`
+	RecoveryStartedAt   *time.Time      `json:"recovery_started_at,omitempty"`
+	RecoveryNextAt      *time.Time      `json:"recovery_next_at,omitempty"`
+	RecoveryLastError   string          `json:"recovery_last_error"`
+	RecoveryReason      string          `json:"recovery_reason"`
+	StartedAt           time.Time       `json:"started_at"`
+	ExpiresAt           time.Time       `json:"expires_at"`
+	StoppedAt           *time.Time      `json:"stopped_at,omitempty"`
+	Diagnostics         []VPNDiagnostic `json:"diagnostics,omitempty" gorm:"-"`
+}
+
+type VPNDiagnostic struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Source   string `json:"source,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 type AgentVPNAuditLog struct {
