@@ -7,6 +7,11 @@ type UserForm struct {
 	Permissions *UserPermissions `json:"permissions,omitempty"`
 }
 
+type RegisterForm struct {
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
 type UserUpdateForm struct {
 	Role        Role             `json:"role,omitempty"`
 	Username    string           `json:"username,omitempty"`

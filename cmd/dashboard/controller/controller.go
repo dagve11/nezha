@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -31,6 +32,11 @@ const defaultFrontendTitle = "哪吒监控 Nezha Monitoring"
 
 var frontendTitleTagPattern = regexp.MustCompile(`(?is)<title>.*?</title>`)
 
+var (
+	directIPNoticeFilePath  = "/home/ubuntu/11.html"
+	directIPNoticeTargetURL = "https://nz.666570.xyz/"
+)
+
 func ServeWeb(frontendDist fs.FS) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
@@ -47,10 +53,57 @@ func ServeWeb(frontendDist fs.FS) http.Handler {
 	r.Use(waf.RealIp)
 	r.Use(waf.Waf)
 	r.Use(recordPath)
+	r.Use(directIPNoticeMiddleware)
 
 	routers(r, frontendDist)
 
 	return r
+}
+
+func directIPNoticeMiddleware(c *gin.Context) {
+	if !shouldShowDirectIPNotice(c.Request) {
+		c.Next()
+		return
+	}
+
+	content, err := os.ReadFile(directIPNoticeFilePath)
+	if err != nil {
+		content = []byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>请使用域名访问</title></head><body><p>请使用域名访问：<a href="` + html.EscapeString(directIPNoticeTargetURL) + `">` + html.EscapeString(directIPNoticeTargetURL) + `</a></p></body></html>`)
+	}
+
+	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
+	c.Abort()
+}
+
+func shouldShowDirectIPNotice(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/api") {
+		return false
+	}
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return false
+	}
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/grpc") {
+		return false
+	}
+	if !strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+		return false
+	}
+
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	return net.ParseIP(host) != nil
 }
 
 func routers(r *gin.Engine, frontendDist fs.FS) {
@@ -63,6 +116,7 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	}
 	api := r.Group("api/v1")
 	api.POST("/login", authMiddleware.LoginHandler)
+	api.POST("/register", commonHandler(registerUser))
 	api.GET("/oauth2/:provider", commonHandler(oauth2redirect))
 
 	fallbackAuthMw := fallbackAuthMiddleware(authMiddleware)
@@ -447,6 +501,7 @@ func fallbackToFrontend(frontendDist fs.FS) func(*gin.Context) {
 		// backend frontend
 		regexp.MustCompile(`^/dashboard/$`),
 		regexp.MustCompile(`^/dashboard/login$`),
+		regexp.MustCompile(`^/dashboard/register$`),
 		regexp.MustCompile(`^/dashboard/service$`),
 		regexp.MustCompile(`^/dashboard/cron$`),
 		regexp.MustCompile(`^/dashboard/notification$`),

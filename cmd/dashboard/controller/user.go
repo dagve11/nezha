@@ -136,33 +136,65 @@ func createUser(c *gin.Context) (uint64, error) {
 		return 0, err
 	}
 
-	if len(uf.Password) < 6 {
-		return 0, singleton.Localizer.ErrorT("password length must be greater than 6")
-	}
-	if uf.Username == "" {
-		return 0, singleton.Localizer.ErrorT("username can't be empty")
-	}
 	if uf.Role > model.RoleMember {
 		return 0, singleton.Localizer.ErrorT("invalid role")
 	}
 
-	var u model.User
-	u.Username = uf.Username
-	u.Role = uf.Role
-	u.Permissions = permissionsFromForm(uf.Role, uf.Permissions)
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(uf.Password), bcrypt.DefaultCost)
+	u, err := createUserWithPassword(uf.Username, uf.Password, uf.Role, permissionsFromForm(uf.Role, uf.Permissions))
 	if err != nil {
 		return 0, err
 	}
-	u.Password = string(hash)
+	return u.ID, nil
+}
 
-	if err := singleton.DB.Create(&u).Error; err != nil {
+// Register user
+// @Summary Register user
+// @Schemes
+// @Description Register a member account
+// @Tags auth
+// @Accept json
+// @param request body model.RegisterForm true "Register Request"
+// @Produce json
+// @Success 200 {object} model.CommonResponse[uint64]
+// @Router /register [post]
+func registerUser(c *gin.Context) (uint64, error) {
+	var rf model.RegisterForm
+	if err := c.ShouldBindJSON(&rf); err != nil {
 		return 0, err
 	}
 
-	singleton.OnUserUpdate(&u)
+	u, err := createUserWithPassword(rf.Username, rf.Password, model.RoleMember, model.DefaultUserPermissions(model.RoleMember))
+	if err != nil {
+		return 0, err
+	}
 	return u.ID, nil
+}
+
+func createUserWithPassword(username, password string, role model.Role, permissions model.UserPermissions) (*model.User, error) {
+	if len(password) < 6 {
+		return nil, singleton.Localizer.ErrorT("password length must be greater than 6")
+	}
+	if username == "" {
+		return nil, singleton.Localizer.ErrorT("username can't be empty")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+
+	u := model.User{
+		Username:    username,
+		Role:        role,
+		Permissions: permissions,
+		Password:    string(hash),
+	}
+	if err := singleton.DB.Create(&u).Error; err != nil {
+		return nil, err
+	}
+
+	singleton.OnUserUpdate(&u)
+	return &u, nil
 }
 
 // Update user
