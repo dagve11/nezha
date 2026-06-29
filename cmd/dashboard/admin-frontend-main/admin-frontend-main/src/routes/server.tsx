@@ -149,11 +149,6 @@ export default function ServerPage() {
             accessorFn: (row) => row.host.version || t("Unknown"),
         },
         {
-            header: t("EnableDDNS"),
-            accessorKey: "enableDDNS",
-            accessorFn: (row) => row.enable_ddns ?? false,
-        },
-        {
             header: t("HideForGuest"),
             accessorKey: "hideForGuest",
             accessorFn: (row) => row.hide_for_guest ?? false,

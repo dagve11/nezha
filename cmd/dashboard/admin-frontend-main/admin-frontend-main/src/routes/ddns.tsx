@@ -83,6 +83,16 @@ export default function DDNSPage() {
             },
         },
         {
+            header: "IPv4",
+            accessorKey: "enableIPv4",
+            accessorFn: (row) => row.enable_ipv4 ?? false,
+        },
+        {
+            header: "IPv6",
+            accessorKey: "enableIPv6",
+            accessorFn: (row) => row.enable_ipv6 ?? false,
+        },
+        {
             header: t("Provider"),
             accessorKey: "provider",
             accessorFn: (row) => row.provider,
