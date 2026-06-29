@@ -15,23 +15,23 @@ import{H as I,b as qd,g as Ev,r as H,a as kv,c as Tv,j as _e}from"./react-CIESKE
     margin-right: `).concat(s,"px ").concat(n,`;
     `),r==="padding"&&"padding-right: ".concat(s,"px ").concat(n,";")].filter(Boolean).join(""),`
   }
-
+  
   .`).concat(Rs,` {
     right: `).concat(s,"px ").concat(n,`;
   }
-
+  
   .`).concat(Ms,` {
     margin-right: `).concat(s,"px ").concat(n,`;
   }
-
+  
   .`).concat(Rs," .").concat(Rs,` {
     right: 0 `).concat(n,`;
   }
-
+  
   .`).concat(Ms," .").concat(Ms,` {
     margin-right: 0 `).concat(n,`;
   }
-
+  
   body[`).concat($n,`] {
     `).concat(j0,": ").concat(s,`px;
   }
