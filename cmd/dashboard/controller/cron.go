@@ -50,8 +50,8 @@ func createCron(c *gin.Context) (uint64, error) {
 		return 0, err
 	}
 
-	if !singleton.ServerShared.CheckPermission(c, slices.Values(cf.Servers)) {
-		return 0, singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsServers(c, slices.Values(cf.Servers)); err != nil {
+		return 0, err
 	}
 
 	if err := assertOwnsNotificationGroup(c, cf.NotificationGroupID); err != nil {
@@ -111,8 +111,8 @@ func updateCron(c *gin.Context) (any, error) {
 		return 0, err
 	}
 
-	if !singleton.ServerShared.CheckPermission(c, slices.Values(cf.Servers)) {
-		return 0, singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsServers(c, slices.Values(cf.Servers)); err != nil {
+		return nil, err
 	}
 
 	if err := assertOwnsNotificationGroup(c, cf.NotificationGroupID); err != nil {

@@ -311,6 +311,66 @@ func TestVPNListPolicyFiltersRowsWhenServerOwnershipChanged(t *testing.T) {
 	require.Empty(t, policies, "member must not see VPN policies whose entry or exit server is no longer permitted")
 }
 
+func TestVPNListServerIncludesSharedForeignServer(t *testing.T) {
+	ctx := setupVPNControllerFixture(t)
+	shared := &model.Server{
+		Common:    model.Common{ID: 3, UserID: 300},
+		Name:      "shared-exit",
+		UUID:      "shared-exit",
+		VPNShared: true,
+		Host: &model.Host{
+			VPNEnabled:          true,
+			VPNAllowSystemProxy: true,
+			VPNAllowTun:         true,
+			VPNCoreVersion:      "1.12.0",
+		},
+	}
+	singleton.ServerShared.Update(shared, "")
+
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/vpn/server", nil)
+	servers, err := listVPNServer(ctx)
+
+	require.NoError(t, err)
+	require.Len(t, servers, 3)
+	var found model.AgentVPNServer
+	for _, server := range servers {
+		if server.ID == 3 {
+			found = server
+			break
+		}
+	}
+	require.Equal(t, uint64(3), found.ID)
+	require.False(t, found.Owned)
+	require.True(t, found.Shared)
+	require.True(t, found.VPNEnabled)
+}
+
+func TestVPNListPolicyAllowsSharedServerAfterOwnershipChanged(t *testing.T) {
+	ctx := setupVPNControllerFixture(t)
+	require.NoError(t, singleton.DB.Create(&model.AgentVPNPolicy{
+		Common:              model.Common{ID: 77, UserID: 200},
+		Name:                "shared server policy",
+		EntryServerID:       1,
+		ExitServerID:        2,
+		Mode:                model.VPNModeSystemProxy,
+		RuleMode:            model.VPNRuleModeGlobal,
+		ListenSOCKS:         "127.0.0.1:1080",
+		ExpiresSeconds:      3600,
+		NotificationGroupID: 9,
+	}).Error)
+	entry, ok := singleton.ServerShared.Get(1)
+	require.True(t, ok)
+	entry.SetUserID(300)
+	entry.VPNShared = true
+
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/vpn/policy", nil)
+	policies, err := listVPNPolicy(ctx)
+
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	require.Equal(t, "shared server policy", policies[0].Name)
+}
+
 func TestVPNListAuditFiltersRowsWhenServerOwnershipChanged(t *testing.T) {
 	ctx := setupVPNControllerFixture(t)
 	require.NoError(t, singleton.DB.Create(&model.AgentVPNAuditLog{

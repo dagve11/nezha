@@ -64,7 +64,11 @@ func (c *ServerClass) Delete(idList []uint64) {
 	c.listMu.Lock()
 
 	for _, id := range idList {
-		serverUUID := c.list[id].UUID
+		server, ok := c.list[id]
+		if !ok || server == nil {
+			continue
+		}
+		serverUUID := server.UUID
 		delete(c.uuidToID, serverUUID)
 		delete(c.list, id)
 	}

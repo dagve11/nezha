@@ -233,6 +233,7 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	natAuth.POST("/batch-delete/nat", commonHandler(batchDeleteNAT))
 
 	vpnAuth := auth.Group("", userFeatureMiddleware(model.UserFeatureVPN))
+	vpnAuth.GET("/vpn/server", commonHandler(listVPNServer))
 	vpnAuth.GET("/vpn/policy", commonHandler(listVPNPolicy))
 	vpnAuth.POST("/vpn/policy", commonHandler(createVPNPolicy))
 	vpnAuth.PATCH("/vpn/policy/:id", commonHandler(updateVPNPolicy))

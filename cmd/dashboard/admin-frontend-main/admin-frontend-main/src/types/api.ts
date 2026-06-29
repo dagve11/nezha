@@ -548,6 +548,24 @@ export interface ModelServerOwner {
     username?: string
 }
 
+export interface ModelAgentVPNServer {
+    id: number
+    name: string
+    online: boolean
+    owned: boolean
+    owner?: ModelServerOwner
+    shared: boolean
+    vpn_allow_system_proxy: boolean
+    vpn_allow_tun: boolean
+    vpn_core_version?: string
+    vpn_direct_crypto_version?: string
+    vpn_direct_enabled: boolean
+    vpn_direct_listen_port?: number
+    vpn_direct_transports?: string[]
+    vpn_enabled: boolean
+    vpn_last_error?: string
+}
+
 export interface ModelServer {
     created_at: string
     /** DDNS配置 */
@@ -576,6 +594,8 @@ export interface ModelServer {
     state: ModelHostState
     updated_at: string
     uuid: string
+    /** 允许其他用户作为代理隧道节点使用 */
+    vpn_shared?: boolean
 }
 
 export interface ModelServerConfigForm {
@@ -601,6 +621,8 @@ export interface ModelServerForm {
     override_ddns_domains?: Record<string, string[]>
     /** 公开备注 */
     public_note?: string
+    /** 允许其他用户作为代理隧道节点使用 */
+    vpn_shared?: boolean
 }
 
 export interface ModelServerGroup {

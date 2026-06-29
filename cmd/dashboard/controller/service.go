@@ -593,15 +593,15 @@ func batchDeleteService(c *gin.Context) (any, error) {
 }
 
 func validateServers(c *gin.Context, ss *model.Service) error {
-	if !singleton.ServerShared.CheckPermission(c, maps.Keys(ss.SkipServers)) {
-		return singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsServers(c, maps.Keys(ss.SkipServers)); err != nil {
+		return err
 	}
 
-	if !singleton.CronShared.CheckPermission(c, slices.Values(ss.FailTriggerTasks)) {
-		return singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsCrons(c, slices.Values(ss.FailTriggerTasks)); err != nil {
+		return err
 	}
-	if !singleton.CronShared.CheckPermission(c, slices.Values(ss.RecoverTriggerTasks)) {
-		return singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsCrons(c, slices.Values(ss.RecoverTriggerTasks)); err != nil {
+		return err
 	}
 
 	if err := assertOwnsNotificationGroup(c, ss.NotificationGroupID); err != nil {

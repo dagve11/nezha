@@ -72,8 +72,8 @@ func createNotificationGroup(c *gin.Context) (uint64, error) {
 	}
 	ngf.Notifications = slices.Compact(ngf.Notifications)
 
-	if !singleton.NotificationShared.CheckPermission(c, slices.Values(ngf.Notifications)) {
-		return 0, singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsNotifications(c, slices.Values(ngf.Notifications)); err != nil {
+		return 0, err
 	}
 
 	uid := getUid(c)
@@ -140,9 +140,10 @@ func updateNotificationGroup(c *gin.Context) (any, error) {
 	if err := c.ShouldBindJSON(&ngf); err != nil {
 		return nil, err
 	}
+	ngf.Notifications = slices.Compact(ngf.Notifications)
 
-	if !singleton.NotificationShared.CheckPermission(c, slices.Values(ngf.Notifications)) {
-		return nil, singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsNotifications(c, slices.Values(ngf.Notifications)); err != nil {
+		return nil, err
 	}
 
 	var ngDB model.NotificationGroup
@@ -155,7 +156,6 @@ func updateNotificationGroup(c *gin.Context) (any, error) {
 	}
 
 	ngDB.Name = ngf.Name
-	ngf.Notifications = slices.Compact(ngf.Notifications)
 
 	var count int64
 	if err := singleton.DB.Model(&model.Notification{}).Where("id in (?)", ngf.Notifications).Count(&count).Error; err != nil {

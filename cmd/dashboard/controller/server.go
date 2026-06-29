@@ -69,8 +69,8 @@ func updateServer(c *gin.Context) (any, error) {
 		return nil, err
 	}
 
-	if !singleton.DDNSShared.CheckPermission(c, slices.Values(sf.DDNSProfiles)) {
-		return nil, singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsDDNSProfiles(c, slices.Values(sf.DDNSProfiles)); err != nil {
+		return nil, err
 	}
 
 	var s model.Server
@@ -87,6 +87,7 @@ func updateServer(c *gin.Context) (any, error) {
 	s.Note = sf.Note
 	s.PublicNote = sf.PublicNote
 	s.HideForGuest = sf.HideForGuest
+	s.VPNShared = sf.VPNShared
 	s.EnableDDNS = sf.EnableDDNS
 	s.DDNSProfiles = sf.DDNSProfiles
 	s.OverrideDDNSDomains = sf.OverrideDDNSDomains

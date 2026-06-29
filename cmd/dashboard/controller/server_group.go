@@ -88,8 +88,8 @@ func createServerGroup(c *gin.Context) (uint64, error) {
 	}
 	sgf.Servers = slices.Compact(sgf.Servers)
 
-	if !singleton.ServerShared.CheckPermission(c, slices.Values(sgf.Servers)) {
-		return 0, singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsServers(c, slices.Values(sgf.Servers)); err != nil {
+		return 0, err
 	}
 
 	uid := getUid(c)
@@ -156,8 +156,8 @@ func updateServerGroup(c *gin.Context) (any, error) {
 	}
 	sg.Servers = slices.Compact(sg.Servers)
 
-	if !singleton.ServerShared.CheckPermission(c, slices.Values(sg.Servers)) {
-		return nil, singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsServers(c, slices.Values(sg.Servers)); err != nil {
+		return nil, err
 	}
 
 	var sgDB model.ServerGroup

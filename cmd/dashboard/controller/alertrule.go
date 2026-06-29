@@ -170,8 +170,8 @@ func batchDeleteAlertRule(c *gin.Context) (any, error) {
 func validateRule(c *gin.Context, r *model.AlertRule) error {
 	if len(r.Rules) > 0 {
 		for _, rule := range r.Rules {
-			if !singleton.ServerShared.CheckPermission(c, maps.Keys(rule.Ignore)) {
-				return singleton.Localizer.ErrorT("permission denied")
+			if err := assertOwnsServers(c, maps.Keys(rule.Ignore)); err != nil {
+				return err
 			}
 
 			if !rule.IsTransferDurationRule() {
@@ -194,11 +194,11 @@ func validateRule(c *gin.Context, r *model.AlertRule) error {
 		return singleton.Localizer.ErrorT("need to configure at least a single rule")
 	}
 
-	if !singleton.CronShared.CheckPermission(c, slices.Values(r.FailTriggerTasks)) {
-		return singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsCrons(c, slices.Values(r.FailTriggerTasks)); err != nil {
+		return err
 	}
-	if !singleton.CronShared.CheckPermission(c, slices.Values(r.RecoverTriggerTasks)) {
-		return singleton.Localizer.ErrorT("permission denied")
+	if err := assertOwnsCrons(c, slices.Values(r.RecoverTriggerTasks)); err != nil {
+		return err
 	}
 
 	if err := assertOwnsNotificationGroup(c, r.NotificationGroupID); err != nil {

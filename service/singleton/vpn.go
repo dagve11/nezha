@@ -1148,11 +1148,11 @@ func (v *VPNClass) DeleteSession(actor VPNActor, sessionID string) error {
 	if err := DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
 		return err
 	}
-	if !actorCanUseVPNSession(actor, &session) {
+	if !actorCanDeleteVPNSession(actor, &session) {
 		return errors.New("permission denied")
 	}
 
-	if !isVPNTerminalState(session.State) {
+	if !isVPNTerminalState(session.State) && actorCanUseVPNSession(actor, &session) {
 		stopped, err := v.StopSession(actor, sessionID)
 		if err != nil {
 			return err
@@ -2581,7 +2581,7 @@ func (v *VPNClass) getUsableServer(actor VPNActor, serverID uint64) (*model.Serv
 	if !ok || server == nil {
 		return nil, fmt.Errorf("server %d not found", serverID)
 	}
-	if !actor.IsAdmin() && server.GetUserID() != actor.UserID {
+	if !actorCanUseVPNServer(actor, serverID) {
 		return nil, errors.New("permission denied")
 	}
 	return server, nil
@@ -3387,7 +3387,7 @@ func actorCanUseVPNServer(actor VPNActor, serverID uint64) bool {
 	if !ok || server == nil {
 		return false
 	}
-	return actor.IsAdmin() || server.GetUserID() == actor.UserID
+	return actor.IsAdmin() || server.GetUserID() == actor.UserID || server.VPNShared
 }
 
 func actorCanUseVPNSession(actor VPNActor, session *model.AgentVPNSession) bool {
@@ -3398,6 +3398,19 @@ func actorCanUseVPNSession(actor VPNActor, session *model.AgentVPNSession) bool 
 		return false
 	}
 	return actorCanUseVPNServer(actor, session.EntryServerID) && actorCanUseVPNServer(actor, session.ExitServerID)
+}
+
+func actorCanDeleteVPNSession(actor VPNActor, session *model.AgentVPNSession) bool {
+	if session == nil {
+		return false
+	}
+	if actor.IsAdmin() {
+		return true
+	}
+	if session.GetUserID() != 0 {
+		return session.GetUserID() == actor.UserID
+	}
+	return actorCanUseVPNSession(actor, session)
 }
 
 func validateVPNServerCapabilities(policy *model.AgentVPNPolicy, entry *model.Server, exit *model.Server) error {

@@ -48,7 +48,7 @@ func TestValidateRuleAcceptsEmptyTriggerTasks(t *testing.T) {
 	assert.NoError(t, validateRule(ctx, rule))
 }
 
-func TestValidateRuleAcceptsUnknownTriggerTaskID(t *testing.T) {
+func TestValidateRuleRejectsUnknownTriggerTaskID(t *testing.T) {
 	ctx := newMemberValidationContext(t)
 	rule := &model.AlertRule{
 		Common:           model.Common{UserID: 200},
@@ -56,7 +56,7 @@ func TestValidateRuleAcceptsUnknownTriggerTaskID(t *testing.T) {
 		Rules:            []*model.Rule{{Type: "offline", Duration: 3}},
 		FailTriggerTasks: []uint64{9999},
 	}
-	assert.NoError(t, validateRule(ctx, rule))
+	assert.ErrorContains(t, validateRule(ctx, rule), "task id 9999 does not exist")
 }
 
 func TestValidateRuleRejectsForeignNotificationGroup(t *testing.T) {

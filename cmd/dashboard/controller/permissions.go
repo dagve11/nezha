@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"iter"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -82,6 +83,58 @@ func assertOwnsNotificationGroup(c *gin.Context, groupID uint64) error {
 	}
 	if !ng.HasPermission(c) {
 		return singleton.Localizer.ErrorT("permission denied")
+	}
+	return nil
+}
+
+func assertOwnsServers(c *gin.Context, ids iter.Seq[uint64]) error {
+	for id := range ids {
+		server, ok := singleton.ServerShared.Get(id)
+		if !ok || server == nil {
+			return singleton.Localizer.ErrorT("server id %d does not exist", id)
+		}
+		if !server.HasPermission(c) {
+			return singleton.Localizer.ErrorT("permission denied")
+		}
+	}
+	return nil
+}
+
+func assertOwnsCrons(c *gin.Context, ids iter.Seq[uint64]) error {
+	for id := range ids {
+		cron, ok := singleton.CronShared.Get(id)
+		if !ok || cron == nil {
+			return singleton.Localizer.ErrorT("task id %d does not exist", id)
+		}
+		if !cron.HasPermission(c) {
+			return singleton.Localizer.ErrorT("permission denied")
+		}
+	}
+	return nil
+}
+
+func assertOwnsDDNSProfiles(c *gin.Context, ids iter.Seq[uint64]) error {
+	for id := range ids {
+		profile, ok := singleton.DDNSShared.Get(id)
+		if !ok || profile == nil {
+			return singleton.Localizer.ErrorT("ddns id %d does not exist", id)
+		}
+		if !profile.HasPermission(c) {
+			return singleton.Localizer.ErrorT("permission denied")
+		}
+	}
+	return nil
+}
+
+func assertOwnsNotifications(c *gin.Context, ids iter.Seq[uint64]) error {
+	for id := range ids {
+		notification, ok := singleton.NotificationShared.Get(id)
+		if !ok || notification == nil {
+			return singleton.Localizer.ErrorT("notification id %d does not exist", id)
+		}
+		if !notification.HasPermission(c) {
+			return singleton.Localizer.ErrorT("permission denied")
+		}
 	}
 	return nil
 }

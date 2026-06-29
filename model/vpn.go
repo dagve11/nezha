@@ -252,6 +252,24 @@ type AgentVPNPolicyStatusCheck struct {
 	Nodes      []AgentVPNPolicyNodeStatus `json:"nodes"`
 }
 
+type AgentVPNServer struct {
+	ID                  uint64           `json:"id"`
+	Name                string           `json:"name"`
+	Owner               *ServerOwnerInfo `json:"owner,omitempty"`
+	Owned               bool             `json:"owned"`
+	Shared              bool             `json:"shared"`
+	Online              bool             `json:"online"`
+	VPNEnabled          bool             `json:"vpn_enabled"`
+	VPNAllowSystemProxy bool             `json:"vpn_allow_system_proxy"`
+	VPNAllowTun         bool             `json:"vpn_allow_tun"`
+	VPNCoreVersion      string           `json:"vpn_core_version,omitempty"`
+	VPNLastError        string           `json:"vpn_last_error,omitempty"`
+	VPNDirectEnabled    bool             `json:"vpn_direct_enabled"`
+	VPNDirectListenPort uint32           `json:"vpn_direct_listen_port,omitempty"`
+	VPNDirectTransports []string         `json:"vpn_direct_transports,omitempty"`
+	VPNDirectCrypto     string           `json:"vpn_direct_crypto_version,omitempty"`
+}
+
 type AgentVPNPolicyNodeStatus struct {
 	Role         string   `json:"role"`
 	ServerID     uint64   `json:"server_id"`

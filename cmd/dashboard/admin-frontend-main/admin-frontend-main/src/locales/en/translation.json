@@ -46,6 +46,7 @@
     "Unknown": "unknown",
     "Enable": "Enable",
     "HideForGuest": "Hidden from Visitors",
+    "VPNShared": "Proxy Tunnel Shared",
     "InstallCommands": "Installation command",
     "Terminal": "Terminal",
     "Config": "Config",

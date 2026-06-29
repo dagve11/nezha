@@ -261,6 +261,28 @@ func TestVPNSavePolicyRejectsForeignExitForMember(t *testing.T) {
 	}
 }
 
+func TestVPNSavePolicyAllowsSharedForeignExitForMember(t *testing.T) {
+	h := newVPNHarness(t)
+	h.mustServer(3).VPNShared = true
+
+	policy, err := h.vpn.SavePolicy(VPNActor{UserID: 100, Role: model.RoleMember}, model.AgentVPNPolicyForm{
+		Name:           "shared foreign exit",
+		EntryServerID:  1,
+		ExitServerID:   3,
+		Mode:           model.VPNModeSystemProxy,
+		RuleMode:       model.VPNRuleModeGlobal,
+		ListenSOCKS:    "127.0.0.1:1080",
+		ExpiresSeconds: 3600,
+	})
+
+	if err != nil {
+		t.Fatalf("member should be able to create a VPN policy using a shared exit server: %v", err)
+	}
+	if policy.GetUserID() != 100 {
+		t.Fatalf("expected policy owner 100, got %d", policy.GetUserID())
+	}
+}
+
 func TestVPNSavePolicyRejectsForeignNotificationGroupAtServiceLayer(t *testing.T) {
 	h := newVPNHarness(t)
 	actor := VPNActor{UserID: 100, Role: model.RoleMember}
@@ -4842,6 +4864,69 @@ func TestVPNDeleteSessionStopsAndDeletesRecord(t *testing.T) {
 	var audit model.AgentVPNAuditLog
 	if err := DB.Where("action = ? AND session_id = ?", model.VPNAuditActionDeleteSession, session.SessionID).Last(&audit).Error; err != nil {
 		t.Fatalf("delete session audit must be written: %v", err)
+	}
+}
+
+func TestVPNDeleteStaleSessionWithDeletedServer(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+	session := model.AgentVPNSession{
+		Common:        model.Common{UserID: actor.UserID},
+		PolicyID:      policy.ID,
+		EntryServerID: 99,
+		ExitServerID:  policy.ExitServerID,
+		SessionID:     "stale-deleted-entry",
+		TokenHash:     hashVPNToken("stale-token"),
+		Mode:          policy.Mode,
+		RelayMode:     model.VPNRelayModeDashboard,
+		RuleMode:      policy.RuleMode,
+		State:         model.VPNStateStopped,
+		EntryState:    model.VPNStateStopped,
+		ExitState:     model.VPNStateStopped,
+	}
+	if err := DB.Create(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.vpn.DeleteSession(actor, session.SessionID); err != nil {
+		t.Fatalf("delete stale session with deleted server: %v", err)
+	}
+
+	var count int64
+	if err := DB.Model(&model.AgentVPNSession{}).Where("session_id = ?", session.SessionID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("stale session record must be deleted, got count=%d", count)
+	}
+}
+
+func TestVPNDeleteForeignStaleSessionWithDeletedServerDenied(t *testing.T) {
+	h := newVPNHarness(t)
+	actor := VPNActor{UserID: 100, Role: model.RoleMember}
+	policy := createTestVPNPolicy(t, h, actor)
+	session := model.AgentVPNSession{
+		Common:        model.Common{UserID: actor.UserID},
+		PolicyID:      policy.ID,
+		EntryServerID: 99,
+		ExitServerID:  policy.ExitServerID,
+		SessionID:     "foreign-stale-deleted-entry",
+		TokenHash:     hashVPNToken("stale-token"),
+		Mode:          policy.Mode,
+		RelayMode:     model.VPNRelayModeDashboard,
+		RuleMode:      policy.RuleMode,
+		State:         model.VPNStateStopped,
+		EntryState:    model.VPNStateStopped,
+		ExitState:     model.VPNStateStopped,
+	}
+	if err := DB.Create(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := h.vpn.DeleteSession(VPNActor{UserID: 200, Role: model.RoleMember}, session.SessionID)
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("foreign stale session delete must be denied, got %v", err)
 	}
 }
 

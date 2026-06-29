@@ -84,6 +84,7 @@ const serverFormSchema = z.object({
     ),
     display_index: z.coerce.number().int(),
     hide_for_guest: asOptionalField(z.boolean()),
+    vpn_shared: asOptionalField(z.boolean()),
     enable_ddns: asOptionalField(z.boolean()),
     ddns_profiles: asOptionalField(z.array(z.number())),
     ddns_profiles_raw: asOptionalField(z.string()),
@@ -349,6 +350,26 @@ export const ServerCard: React.FC<ServerCardProps> = ({ data, mutate }) => {
                                                     />
                                                     <Label className="text-sm">
                                                         {t("HideForGuest")}
+                                                    </Label>
+                                                </div>
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                                <FormField
+                                    control={form.control}
+                                    name="vpn_shared"
+                                    render={({ field }) => (
+                                        <FormItem className="flex items-center space-x-2">
+                                            <FormControl>
+                                                <div className="flex items-center gap-2">
+                                                    <Checkbox
+                                                        checked={field.value}
+                                                        onCheckedChange={field.onChange}
+                                                    />
+                                                    <Label className="text-sm">
+                                                        {t("VPNShared")}
                                                     </Label>
                                                 </div>
                                             </FormControl>

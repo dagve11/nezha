@@ -1,4 +1,5 @@
 import {
+    ModelAgentVPNServer,
     ModelBatchMoveServerForm,
     ModelBatchMoveServerResult,
     ModelServer,
@@ -35,6 +36,10 @@ export const forceUpdateServer = async (id: number[]): Promise<ModelServerTaskRe
 
 export const getServers = async (): Promise<ModelServer[]> => {
     return fetcher<ModelServer[]>(FetcherMethod.GET, "/api/v1/server", null)
+}
+
+export const getVPNServers = async (): Promise<ModelAgentVPNServer[]> => {
+    return fetcher<ModelAgentVPNServer[]>(FetcherMethod.GET, "/api/v1/vpn/server", null)
 }
 
 export const getServerConfig = async (id: number): Promise<string> => {

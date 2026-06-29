@@ -46,6 +46,7 @@
     "Unknown": "未知",
     "Enable": "启用",
     "HideForGuest": "对游客隐藏",
+    "VPNShared": "代理隧道共享",
     "InstallCommands": "安装命令",
     "Terminal": "终端",
     "Config": "配置",

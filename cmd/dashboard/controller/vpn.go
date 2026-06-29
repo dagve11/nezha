@@ -34,6 +34,18 @@ func listVPNPolicy(c *gin.Context) ([]*model.AgentVPNPolicy, error) {
 	return policies, nil
 }
 
+func listVPNServer(c *gin.Context) ([]model.AgentVPNServer, error) {
+	servers := singleton.ServerShared.GetSortedList()
+	out := make([]model.AgentVPNServer, 0, len(servers))
+	for _, server := range servers {
+		if !vpnServerCanBeSelected(c, server) {
+			continue
+		}
+		out = append(out, vpnServerResponse(c, server))
+	}
+	return out, nil
+}
+
 func createVPNPolicy(c *gin.Context) (uint64, error) {
 	var form model.AgentVPNPolicyForm
 	if err := c.ShouldBindJSON(&form); err != nil {
@@ -377,11 +389,49 @@ func vpnServersHavePermission(c *gin.Context, entryServerID uint64, exitServerID
 		return true
 	}
 	entry, ok := singleton.ServerShared.Get(entryServerID)
-	if !ok || entry == nil || !entry.HasPermission(c) {
+	if !ok || !vpnServerCanBeSelected(c, entry) {
 		return false
 	}
 	exit, ok := singleton.ServerShared.Get(exitServerID)
-	return ok && exit != nil && exit.HasPermission(c)
+	return ok && vpnServerCanBeSelected(c, exit)
+}
+
+func vpnServerCanBeSelected(c *gin.Context, server *model.Server) bool {
+	if server == nil {
+		return false
+	}
+	if callerIsAdmin(c) || server.HasPermission(c) {
+		return true
+	}
+	return server.VPNShared
+}
+
+func vpnServerResponse(c *gin.Context, server *model.Server) model.AgentVPNServer {
+	resp := model.AgentVPNServer{
+		ID:     server.ID,
+		Name:   server.Name,
+		Owned:  server.HasPermission(c),
+		Shared: server.VPNShared,
+		Online: server.GetTaskStream() != nil,
+		Owner:  &model.ServerOwnerInfo{ID: server.GetUserID()},
+	}
+	if model.ServerOwnerLookup != nil {
+		if owner, ok := model.ServerOwnerLookup(server.GetUserID()); ok {
+			resp.Owner = &owner
+		}
+	}
+	if server.Host != nil {
+		resp.VPNEnabled = server.Host.VPNEnabled
+		resp.VPNAllowSystemProxy = server.Host.VPNAllowSystemProxy
+		resp.VPNAllowTun = server.Host.VPNAllowTun
+		resp.VPNCoreVersion = server.Host.VPNCoreVersion
+		resp.VPNLastError = server.Host.VPNLastError
+		resp.VPNDirectEnabled = server.Host.VPNDirectEnabled
+		resp.VPNDirectListenPort = server.Host.VPNDirectListenPort
+		resp.VPNDirectTransports = append([]string(nil), server.Host.VPNDirectTransports...)
+		resp.VPNDirectCrypto = server.Host.VPNDirectCrypto
+	}
+	return resp
 }
 
 func getPermittedVPNSession(c *gin.Context, sessionID string) (*model.AgentVPNSession, error) {
